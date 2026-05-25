@@ -21,7 +21,7 @@ body:
       description: Which plugin has the issue?
       options:
         - Auto Light
-        - Block to Storage
+        - Blocks to Storage
         - Other / Not sure
     validations:
       required: true
