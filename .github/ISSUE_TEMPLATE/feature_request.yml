@@ -21,7 +21,7 @@ body:
       description: Which plugin or area is this feature for?
       options:
         - Auto Light
-        - Block to Storage
+        - Blocks to Storage
         - New plugin idea
         - General repo / documentation
         - Other / Not sure
