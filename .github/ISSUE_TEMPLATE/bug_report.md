@@ -16,7 +16,7 @@ Which plugin has the issue?
 Examples:
 
 * Auto Light
-* Block to Chest
+* Block to Storage
 * Other / Not sure
 
 ---
