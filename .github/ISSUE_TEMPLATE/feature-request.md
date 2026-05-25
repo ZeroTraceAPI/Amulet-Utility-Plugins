@@ -16,7 +16,7 @@ Which plugin or area is this feature for?
 Examples:
 
 * Auto Light
-* Block to Chest
+* Block to Storage
 * New plugin idea
 * General repo / documentation
 * Other / Not sure
