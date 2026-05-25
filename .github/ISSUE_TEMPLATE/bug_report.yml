@@ -5,6 +5,16 @@ labels: ["bug"]
 assignees: []
 
 body:
+  - type: checkboxes
+    attributes:
+      label: Before reporting
+      options:
+        - label: I searched existing issues to make sure this was not already reported.
+          required: true
+
+        - label: I tested this with the latest available version of the plugin, if possible.
+          required: false
+
   - type: dropdown
     attributes:
       label: Plugin
@@ -84,14 +94,8 @@ body:
 
   - type: input
     attributes:
-      label: Plugin name
-      placeholder: "Auto Light"
-    validations:
-      required: true
-
-  - type: input
-    attributes:
       label: Plugin version / file name
+      description: Enter the plugin version or exact file name you are using, if known.
       placeholder: "Auto_light.py, Auto_light_V4-0-2-2.py, Block_to_chest.py"
     validations:
       required: false
