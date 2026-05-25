@@ -1,36 +1,152 @@
 name: Feature Request (Guided)
-description: Suggest an improvement or new feature.
-title: "[Feature]: "
+description: Suggest an improvement, new option, or new plugin idea for the Amulet utility plugins.
+title: "[FEATURE] "
 labels: ["enhancement"]
+assignees: []
 
 body:
-  - type: textarea
+  - type: checkboxes
     attributes:
-      label: Feature Description
-      description: |
-        Clearly describe the feature, improvement, or idea.
+      label: Before requesting
+      options:
+        - label: I searched existing issues to make sure this was not already requested.
+          required: true
+
+        - label: I checked the latest available version of the plugin, if possible.
+          required: false
+
+  - type: dropdown
+    attributes:
+      label: Plugin or area
+      description: Which plugin or area is this feature for?
+      options:
+        - Auto Light
+        - Block to Chest
+        - New plugin idea
+        - General repo / documentation
+        - Other / Not sure
     validations:
       required: true
 
   - type: textarea
     attributes:
-      label: Problem or Limitation
+      label: Describe the feature
       description: |
-        What problem would this solve?
-        What limitation currently exists?
+        What would you like to see added or improved?
+
+        Explain the idea clearly. Include what the feature should do and how it could help.
       placeholder: |
-        The current inventory editor cannot...
+        Example:
+        Add an option to choose which light source Auto Light places.
+    validations:
+      required: true
 
   - type: textarea
     attributes:
-      label: Proposed Solution
-      description: |
-        Describe how you think this could work.
+      label: Problem or limitation
+      description: What issue, limitation, or inconvenience would this solve?
       placeholder: |
-        Add a button that...
+        Example:
+        Auto Light currently uses one type of light source, but some builds may need lanterns, sea lanterns, glowstone, or other blocks instead.
+    validations:
+      required: false
 
   - type: textarea
     attributes:
-      label: Additional Notes
+      label: Proposed solution
+      description: Describe how you think this feature could work.
+      placeholder: |
+        Example:
+        Add a dropdown or text field that lets the user choose the light source before running the plugin.
+    validations:
+      required: false
+
+  - type: textarea
+    attributes:
+      label: Alternatives considered
       description: |
-        Optional screenshots, mockups, references, or extra details.
+        Optional.
+
+        Have you considered any alternative solutions, settings, or workarounds?
+      placeholder: |
+        Example:
+        Manually replacing torches after running the plugin works, but it takes extra time.
+    validations:
+      required: false
+
+  - type: textarea
+    attributes:
+      label: Use case
+      description: |
+        Optional.
+
+        Describe when or why this feature would be useful.
+      placeholder: |
+        Example:
+        This would help when lighting decorative builds where torches do not match the design.
+    validations:
+      required: false
+
+  - type: input
+    attributes:
+      label: OS, if relevant
+      placeholder: "Windows 11"
+    validations:
+      required: false
+
+  - type: input
+    attributes:
+      label: Amulet version, if relevant
+      placeholder: "0.10.44"
+    validations:
+      required: false
+
+  - type: dropdown
+    attributes:
+      label: Minecraft edition, if relevant
+      options:
+        - Not relevant
+        - Bedrock Edition
+        - Java Edition
+        - Other / Not sure
+    validations:
+      required: false
+
+  - type: input
+    attributes:
+      label: Minecraft version, if relevant
+      placeholder: "1.21.82"
+    validations:
+      required: false
+
+  - type: input
+    attributes:
+      label: Plugin version / file name, if relevant
+      description: Enter the plugin version or exact file name if this request is tied to a specific version.
+      placeholder: "Auto_light_v1.py"
+    validations:
+      required: false
+
+  - type: input
+    attributes:
+      label: World type, if relevant
+      placeholder: "Bedrock world, Realm download, converted world, flat world, large survival world"
+    validations:
+      required: false
+
+  - type: textarea
+    attributes:
+      label: Screenshots, mockups, or examples
+      description: |
+        Optional.
+
+        Add screenshots, mockups, references, examples, or extra context if it helps explain the feature.
+    validations:
+      required: false
+
+  - type: textarea
+    attributes:
+      label: Additional notes
+      description: Anything else that may help explain, evaluate, or understand the request.
+    validations:
+      required: false
