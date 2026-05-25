@@ -1,44 +1,69 @@
 name: Bug Report (Guided)
-description: Create a report to help improve the plugin
-title: "[Bug]: "
+description: Report a bug, crash, or unexpected behavior in one of the Amulet utility plugins.
+title: "[BUG] "
 labels: ["bug"]
+assignees: []
 
 body:
-  - type: checkboxes
+  - type: dropdown
     attributes:
-      label: Before reporting
+      label: Plugin
+      description: Which plugin has the issue?
       options:
-        - label: I searched existing issues to make sure this was not already reported.
-          required: true
-
-        - label: I tested this on the latest community-maintained branch if available.
-          required: false
+        - Auto Light
+        - Block to Chest
+        - Other / Not sure
+    validations:
+      required: true
 
   - type: textarea
     attributes:
       label: Describe the issue
-      description: Clearly explain what happened.
-      placeholder: The inventory editor crashes when...
+      description: |
+        What happened?
+
+        Explain the problem clearly. Include what you were doing when the issue happened.
+      placeholder: |
+        Example:
+        Auto Light crashed after I selected a region and clicked Run.
     validations:
       required: true
 
   - type: textarea
     attributes:
       label: Steps to reproduce
+      description: List the steps needed to reproduce the issue.
       placeholder: |
-        1. Open Amulet
-        2. Open Inventory Editor
-        3. Click...
-        4. Crash occurs
+        1.
+        2.
+        3.
+        4.
     validations:
       required: true
 
   - type: textarea
     attributes:
       label: Expected behavior
-      description: What should happen instead?
+      description: What should have happened instead?
+      placeholder: |
+        Example:
+        The plugin should have completed the operation without crashing.
     validations:
       required: true
+
+  - type: input
+    attributes:
+      label: OS
+      placeholder: "Windows 11"
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: Amulet version
+      placeholder: "0.10.44"
+    validations:
+      required: false
 
   - type: dropdown
     attributes:
@@ -46,8 +71,7 @@ body:
       options:
         - Bedrock Edition
         - Java Edition
-        - Both
-        - Unknown
+        - Other / Not sure
     validations:
       required: true
 
@@ -60,22 +84,22 @@ body:
 
   - type: input
     attributes:
-      label: Amulet version
-      placeholder: "0.10.x"
-    validations:
-      required: false
-
-  - type: input
-    attributes:
-      label: Operating system
-      placeholder: "Windows 11"
+      label: Plugin name
+      placeholder: "Auto Light"
     validations:
       required: true
 
   - type: input
     attributes:
-      label: Plugin branch / version
-      placeholder: "community-maintained-v1"
+      label: Plugin version / file name
+      placeholder: "Auto_light.py, Auto_light_V4-0-2-2.py, Block_to_chest.py"
+    validations:
+      required: false
+
+  - type: input
+    attributes:
+      label: World type, if relevant
+      placeholder: "Bedrock world, Realm download, converted world, flat world, large survival world"
     validations:
       required: false
 
@@ -83,9 +107,25 @@ body:
     attributes:
       label: Console errors or logs
       description: Paste any relevant errors here.
-      render: shell
+      render: text
+      placeholder: |
+        Paste errors here.
+    validations:
+      required: false
 
   - type: textarea
     attributes:
-      label: Screenshots or videos
-      description: Optional
+      label: Screenshots or video
+      description: |
+        Optional.
+
+        Add screenshots or a video if it helps explain the issue.
+    validations:
+      required: false
+
+  - type: textarea
+    attributes:
+      label: Additional notes
+      description: Anything else that may help reproduce, explain, or understand the issue.
+    validations:
+      required: false
