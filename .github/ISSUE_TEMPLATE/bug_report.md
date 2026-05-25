@@ -1,6 +1,6 @@
 ---
 name: Bug Report (Simple)
-about: Create a report to help improve the plugin
+about: Report a bug, crash, or unexpected behavior in one of the Amulet utility plugins.
 title: "[BUG] "
 labels: bug
 assignees: ''
@@ -9,9 +9,23 @@ assignees: ''
 
 # Bug Report
 
+## Plugin
+
+Which plugin has the issue?
+
+Examples:
+
+* Auto Light
+* Block to Chest
+* Other / Not sure
+
+---
+
 ## Describe the issue
 
 What happened?
+
+Explain the problem clearly. Include what you were doing when the issue happened.
 
 ---
 
@@ -26,7 +40,7 @@ What happened?
 
 ## Expected behavior
 
-What should happen instead?
+What should have happened instead?
 
 ---
 
@@ -34,9 +48,11 @@ What should happen instead?
 
 * OS:
 * Amulet version:
+* Minecraft edition:
 * Minecraft version:
-* Java or Bedrock edition:
-* Plugin branch / version:
+* Plugin name:
+* Plugin version / file name:
+* World type, if relevant:
 
 ---
 
@@ -46,12 +62,14 @@ Paste any relevant errors here.
 
 ---
 
-## Screenshots
+## Screenshots or video
 
 (Optional)
+
+Add screenshots or a video if it helps explain the issue.
 
 ---
 
 ## Additional notes
 
-Anything else that may help reproduce or explain the issue.
+Anything else that may help reproduce, explain, or understand the issue.
