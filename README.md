@@ -1,6 +1,6 @@
 # Amulet Utility Plugins
 
-A collection of free utility plugins for Amulet Map Editor, focused on Minecraft Bedrock world editing, automation, cleanup, and quality-of-life tools.
+A collection of free utility plugins for Amulet Map Editor, focused on Minecraft Bedrock Edition world editing, automation, cleanup, and quality-of-life tools.
 
 These plugins are made for practical editing workflows. Some may be niche or edge-case tools, but they are designed to save time when working with Minecraft worlds in Amulet Map Editor.
 
@@ -8,15 +8,15 @@ These plugins are made for practical editing workflows. Some may be niche or edg
 
 ### Auto Light
 
-Auto Light helps place light sources in dark areas of a selected Minecraft Bedrock world region.
+Auto Light helps place light sources in dark areas of a selected Minecraft Bedrock Edition world region.
 
-It is intended to reduce manual lighting work in caves, builds, underground areas, and other selected regions where visibility or hostile mob spawning may be a concern.
+It is intended to reduce manual lighting work in caves, builds, underground areas, surface areas, and other places where visibility or hostile mob spawning may be a concern.
 
 ### Blocks to Storage
 
-Blocks to Storage collects blocks from a selected Minecraft Bedrock world region and organizes them into supported storage containers.
+Blocks to Storage collects blocks from a selected Minecraft Bedrock Edition world region and organizes them into supported storage containers.
 
-It is intended for cleanup, resource recovery, testing worlds, large edits, and situations where blocks from a selected area need to be collected or organized instead of manually handled.
+It is intended for cleanup, testing worlds, large edits, and situations where blocks need to be collected or organized instead of manually handled or deleted.
 
 ## Installation (Windows)
 
