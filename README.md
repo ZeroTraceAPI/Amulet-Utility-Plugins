@@ -39,7 +39,8 @@ Donations may be accepted, but there is no required payment or forced paywall fr
 
 ## Official Source
 
-The official source for this project is this GitHub repository. 
+The official source for this project is the [Amulet Utility Plugins GitHub repository](https://github.com/ZeroTraceAPI/Amulet-Utility-Plugins).
+
 If you share, fork, modify, package, or redistribute these plugins, please link back to the official source so users can find a clean and current copy.
 
 ## Contributing
