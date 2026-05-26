@@ -159,7 +159,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         self._sizer = wx.BoxSizer(wx.VERTICAL)
 
-        title = wx.StaticText(self, label="Block To Storage Exporter")
+        title = wx.StaticText(self, label="Blocks to Storage")
         self._sizer.Add(title, 0, wx.ALL, 6)
 
         container_row = wx.BoxSizer(wx.HORIZONTAL)
@@ -589,7 +589,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             )
             return
 
-        default_name = "Block to storage export report; " + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".txt"
+        default_name = "Blocks to Storage export report; " + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".txt"
 
         with wx.FileDialog(
             self,
@@ -1568,7 +1568,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         try:
             self.canvas.run_operation(
                 self._run_export_operation,
-                title="Block To Storage Exporter",
+                title="Blocks to Storage",
                 msg="Moving selected blocks into storage...",
                 throw_exceptions=False,
             )
@@ -1576,7 +1576,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             try:
                 self.canvas.run_operation(
                     self._run_export_operation,
-                    "Block To Storage Exporter",
+                    "Blocks to Storage",
                     "Moving selected blocks into storage...",
                     False,
                 )
@@ -1594,7 +1594,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         total_start = time.perf_counter()
 
         try:
-            self._log("Block To Storage Export Report")
+            self._log("Blocks to Storage Export Report")
             self._log(f"Created: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             self._log("")
             self._log("Starting block scan...")
@@ -1742,4 +1742,4 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             self._finalize_report()
 
 
-export = dict(name="Block To Storage", operation=PluginClassName)
+export = dict(name="Blocks to Storage", operation=PluginClassName)
