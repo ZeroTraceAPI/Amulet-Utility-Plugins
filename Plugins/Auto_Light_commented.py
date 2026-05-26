@@ -315,7 +315,7 @@ class AutoLighting(wx.Panel, DefaultOperationUI):
         # =========================
         # HEADER
         # =========================
-        title = wx.StaticText(self.scroll, label="Auto Lighting")
+        title = wx.StaticText(self.scroll, label="Auto Light")
         title.SetToolTip("Automatically places lights in dark areas.")
         content.Add(title, 0, wx.ALL, 5)
 
@@ -1098,4 +1098,4 @@ class AutoLighting(wx.Panel, DefaultOperationUI):
         self.canvas.run_operation(operation)
 
 
-export = dict(name="Auto Lighting", operation=AutoLighting)
+export = dict(name="Auto Light", operation=AutoLighting)
