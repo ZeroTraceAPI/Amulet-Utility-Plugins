@@ -1098,4 +1098,4 @@ class AutoLighting(wx.Panel, DefaultOperationUI):
         self.canvas.run_operation(operation)
 
 
-export = dict(name="Auto Lighting V1.0.0.0", operation=AutoLighting)
+export = dict(name="Auto Lighting", operation=AutoLighting)
