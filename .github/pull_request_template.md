@@ -1,3 +1,5 @@
+> You may delete any part of this template if you want to start from a blank pull request description, except the **Contribution agreement** section. The **Contribution agreement** section should remain in the pull request. If you remove it, you must still clearly acknowledge that you have read, understand, and agree to the contribution agreement. Pull requests that do not include this acknowledgement may not be merged.
+
 ## Summary
 
 Please explain what this pull request changes.
