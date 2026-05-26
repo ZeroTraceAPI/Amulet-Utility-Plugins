@@ -67,7 +67,6 @@ Describe when or why this feature would be useful.
 * Amulet version:
 * Minecraft edition:
 * Minecraft version:
-* Plugin name:
 * Plugin version / file name:
 * World type, if relevant:
 
