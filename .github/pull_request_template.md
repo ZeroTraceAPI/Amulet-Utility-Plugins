@@ -45,7 +45,7 @@ Minecraft edition:
 Minecraft version:
 Plugin file/version:
 Testing notes:
-````
+```
 
 ---
 
