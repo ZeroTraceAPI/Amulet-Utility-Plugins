@@ -307,20 +307,20 @@ class AutoLighting(wx.Panel, DefaultOperationUI):
         content.Add(lbl, 0, wx.ALL, 5)
         content.Add(row, 0, wx.EXPAND | wx.ALL, 5)
 
-        self.spacing_slider = wx.Slider(self.scroll, value=7, minValue=1, maxValue=15)
-        self.spacing_slider.SetToolTip("Distance between lights in rows and columns, or spread distance in free mode.")
+        self.spacing_slider = wx.Slider(self.scroll, value=7, minValue=0, maxValue=15)
+        self.spacing_slider.SetToolTip("Row / grid mode: number of blocks skipped between lights. Spread mode still uses this as the older spread distance.")
 
         self.spacing_box = wx.TextCtrl(self.scroll, value="7", size=(50, -1))
         self.spacing_box.SetToolTip("Manual spacing input.")
 
-        self._bind(self.spacing_slider, self.spacing_box, 1, 15)
+        self._bind(self.spacing_slider, self.spacing_box, 0, 15)
 
         row = wx.BoxSizer(wx.HORIZONTAL)
         row.Add(self.spacing_slider, 1, wx.RIGHT, 5)
         row.Add(self.spacing_box)
 
         self.spacing_label = wx.StaticText(self.scroll, label="Light Spacing")
-        self.spacing_label.SetToolTip("Controls spacing for either row mode or spread mode.")
+        self.spacing_label.SetToolTip("Row / grid mode uses this as skipped blocks between lights. Example: 5 skips five blocks, then places on the sixth block.")
         content.Add(self.spacing_label, 0, wx.ALL, 5)
         content.Add(row, 0, wx.EXPAND | wx.ALL, 5)
 
@@ -751,17 +751,17 @@ class AutoLighting(wx.Panel, DefaultOperationUI):
 
         return None
 
-    def _build_row_candidates(self, selection_boxes, spacing_value, grid_origin_x, grid_origin_z):
+    def _build_row_candidates(self, selection_boxes, grid_step, grid_origin_x, grid_origin_z):
         allowed_x = set()
         allowed_z = set()
 
         for box in selection_boxes:
             for x in range(box.min_x, box.max_x):
-                if (x - grid_origin_x) % spacing_value == 0:
+                if (x - grid_origin_x) % grid_step == 0:
                     allowed_x.add(x)
 
             for z in range(box.min_z, box.max_z):
-                if (z - grid_origin_z) % spacing_value == 0:
+                if (z - grid_origin_z) % grid_step == 0:
                     allowed_z.add(z)
 
         return allowed_x, allowed_z
@@ -776,9 +776,11 @@ class AutoLighting(wx.Panel, DefaultOperationUI):
         plat = self.world.level_wrapper.platform
         ver = self.world.level_wrapper.version
 
-        spacing_value = max(1, self.spacing_slider.GetValue())
+        raw_spacing_value = self.spacing_slider.GetValue()
         radius = self.radius_slider.GetValue()
         use_row_spacing = self.row_spacing_cb.GetValue()
+        row_grid_step = raw_spacing_value + 1
+        spacing_value = raw_spacing_value if use_row_spacing else max(1, raw_spacing_value)
         replace_plants = self.replace_plants_cb.GetValue()
 
         choice = self.light_choice.GetStringSelection()
@@ -803,7 +805,7 @@ class AutoLighting(wx.Panel, DefaultOperationUI):
                 if use_row_spacing:
                     allowed_x, allowed_z = self._build_row_candidates(
                         sel.selection_boxes,
-                        spacing_value,
+                        row_grid_step,
                         grid_origin_x,
                         grid_origin_z,
                     )
@@ -911,4 +913,4 @@ class AutoLighting(wx.Panel, DefaultOperationUI):
 
         self.canvas.run_operation(operation)
 
-export = dict(name="Auto Light V4.0.2.2", operation=AutoLighting)
+export = dict(name="Auto Light", operation=AutoLighting)
