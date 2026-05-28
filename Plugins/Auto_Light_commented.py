@@ -18,6 +18,7 @@ import wx
 from time import perf_counter
 
 from amulet.api.block import Block
+from amulet_map_editor.programs.edit.api.behaviour import BlockSelectionBehaviour
 from amulet_map_editor.programs.edit.api.operations import DefaultOperationUI
 from amulet.utils import block_coords_to_chunk_coords
 from amulet_nbt import TAG_String, TAG_Byte
@@ -486,6 +487,21 @@ class AutoLighting(wx.Panel, DefaultOperationUI):
         self.SetMinSize((275, 460))
 
         self._update_ui_visibility()
+
+    def bind_events(self):
+        """
+        Connects Amulet selection events when the operation becomes active.
+        """
+        super().bind_events()
+        self._selection.bind_events()
+        self._selection.enable()
+
+    def enable(self):
+        """
+        Enables block selection behavior while the operation panel is open.
+        """
+        self._selection = BlockSelectionBehaviour(self.canvas)
+        self._selection.enable()
 
     # =========================
     # LIGHT DETECTION
