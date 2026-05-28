@@ -2,6 +2,7 @@ import wx
 from time import perf_counter
 
 from amulet.api.block import Block
+from amulet_map_editor.programs.edit.api.behaviour import BlockSelectionBehaviour
 from amulet_map_editor.programs.edit.api.operations import DefaultOperationUI
 from amulet.utils import block_coords_to_chunk_coords
 from amulet_nbt import TAG_String, TAG_Byte
@@ -402,6 +403,15 @@ class AutoLighting(wx.Panel, DefaultOperationUI):
 
         self._update_ui_visibility()
 
+    def bind_events(self):
+        super().bind_events()
+        self._selection.bind_events()
+        self._selection.enable()
+
+    def enable(self):
+        self._selection = BlockSelectionBehaviour(self.canvas)
+        self._selection.enable()
+
     def _is_emitting_light(self, block):
         name = block.base_name
 
@@ -779,6 +789,7 @@ class AutoLighting(wx.Panel, DefaultOperationUI):
         raw_spacing_value = self.spacing_slider.GetValue()
         radius = self.radius_slider.GetValue()
         use_row_spacing = self.row_spacing_cb.GetValue()
+
         row_grid_step = raw_spacing_value + 1
         spacing_value = raw_spacing_value if use_row_spacing else max(1, raw_spacing_value)
         replace_plants = self.replace_plants_cb.GetValue()
