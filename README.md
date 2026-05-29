@@ -30,7 +30,7 @@ More Auto Light screenshots: [`Media/Auto-Light`](Media/Auto-Light)
 
 ### Blocks to Storage
 
-![Blocks to Storage screenshot](Media/Blocks-to-Storage/BtS-S1.jpg)
+![Blocks to Storage screenshot](Media/Blocks-to-Storage/BtS-S2.jpg)
 
 More Blocks to Storage screenshots: [`Media/Blocks-to-Storage`](Media/Blocks-to-Storage)
 
