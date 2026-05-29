@@ -15,7 +15,8 @@ Navigation:
 6. Item packing
 7. Chunk read/write helpers
 8. Scan, clear, layout and placement logic
-9. Main Amulet operation wrapper"""
+9. Item frame placement
+10. Main Amulet operation wrapper"""
 
 import collections
 import math
@@ -36,6 +37,7 @@ try:
         TAG_Byte,
         TAG_Compound,
         TAG_Int,
+        TAG_Float,
         TAG_List,
         TAG_Short,
         TAG_String,
@@ -46,6 +48,7 @@ except Exception:  # pragma: no cover
     TAG_Byte = None
     TAG_Compound = None
     TAG_Int = None
+    TAG_Float = None
     TAG_List = None
     TAG_Short = None
     TAG_String = None
@@ -94,6 +97,23 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "red",
         "black",
     ]
+
+    VALUABLE_ITEM_FRAME_BLOCKS = {
+        "minecraft:ancient_debris",
+        "minecraft:diamond_ore",
+        "minecraft:deepslate_diamond_ore",
+        "minecraft:lapis_ore",
+        "minecraft:deepslate_lapis_ore",
+        "minecraft:emerald_ore",
+        "minecraft:deepslate_emerald_ore",
+        "minecraft:gold_ore",
+        "minecraft:deepslate_gold_ore",
+        "minecraft:raw_gold_block",
+        "minecraft:raw_iron_block",
+        "minecraft:raw_copper_block",
+        "minecraft:amethyst_block",
+        "minecraft:budding_amethyst",
+    }
 
     # Air-like blocks are ignored completely because there is nothing to collect.
     AIR_BLOCKS = {
@@ -223,7 +243,12 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         self.separate_types = wx.CheckBox(self, label="One block type per storage group")
         self.separate_types.SetValue(False)
+        self.separate_types.Bind(wx.EVT_CHECKBOX, self._on_separate_types_changed)
         self._sizer.Add(self.separate_types, 0, wx.ALL, 6)
+
+        self.add_group_item_frames = wx.CheckBox(self, label="Add item frames for separated groups")
+        self.add_group_item_frames.SetValue(False)
+        self._sizer.Add(self.add_group_item_frames, 0, wx.ALL, 6)
 
         self.alphabetical_order = wx.CheckBox(self, label="ABC item order")
         self.alphabetical_order.SetValue(True)
@@ -302,6 +327,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._set_tooltip(
             self.separate_types,
             "Keeps each block type in its own storage group. Example: stone goes into its own containers, dirt goes into its own containers, and so on.",
+        )
+        self._set_tooltip(
+            self.add_group_item_frames,
+            "Only works when One block type per storage group is enabled. Adds one regular item frame or glow item frame to the first storage container for each block type group.",
         )
         self._set_tooltip(
             self.alphabetical_order,
@@ -390,6 +419,12 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         """
         self._update_option_visibility()
 
+    def _on_separate_types_changed(self, _):
+        """
+        Refreshes option visibility when separated storage groups are enabled or disabled.
+        """
+        self._update_option_visibility()
+
     def _update_option_visibility(self) -> None:
         """
         Shows only options that apply to the selected storage container.
@@ -398,8 +433,13 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         is_chest = container == self.CONTAINER_CHEST
         is_shulker = container == self.CONTAINER_SHULKER
+        separate_groups_enabled = self.separate_types.GetValue()
 
         self.use_double_chests.Show(is_chest)
+        self.add_group_item_frames.Show(separate_groups_enabled)
+
+        if not separate_groups_enabled:
+            self.add_group_item_frames.SetValue(False)
 
         for child in self.shulker_color_row.GetChildren():
             window = child.GetWindow()
@@ -958,12 +998,24 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         """
         Builds all storage inventories from the scanned block counts.
         """
+        payloads, group_starts = self._build_container_payloads_and_group_starts(counts)
+        return payloads
+
+    def _build_container_payloads_and_group_starts(
+        self,
+        counts: Dict[str, int],
+    ) -> Tuple[List[List[Tuple[str, int]]], List[Tuple[str, int]]]:
+        """
+        Builds storage inventories and remembers where each separated block group starts.
+        """
         payloads: List[List[Tuple[str, int]]] = []
+        group_starts: List[Tuple[str, int]] = []
         slot_count = self._get_container_slot_count()
         item_names = self._get_ordered_item_names(counts)
 
         if self.separate_types.GetValue():
             for item_name in item_names:
+                group_starts.append((item_name, len(payloads)))
                 payloads.extend(
                     self._pack_stacks_into_containers(
                         self._split_into_stacks(item_name, counts[item_name]),
@@ -976,7 +1028,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 all_stacks.extend(self._split_into_stacks(item_name, counts[item_name]))
             payloads = self._pack_stacks_into_containers(all_stacks, slot_count)
 
-        return payloads
+        return payloads, group_starts
 
     # ---------------------------------------------------------------------
     # Chunk helpers
@@ -1550,6 +1602,181 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 )
 
     # ---------------------------------------------------------------------
+    # Item frame placement
+    # ---------------------------------------------------------------------
+    def _is_valuable_item_for_frame(self, item_name: str) -> bool:
+        """
+        Chooses glow item frames for valuable block groups and regular item frames for common block groups.
+        """
+        return item_name in self.VALUABLE_ITEM_FRAME_BLOCKS
+
+    def _make_universal_item_frame_block(self, facing: str, glowing: bool) -> Block:
+        """
+        Builds the universal item frame block with regular or glow frame state.
+        """
+        return Block(
+            "universal_minecraft",
+            "item_frame_block",
+            {
+                "facing": self._universal_string(facing),
+                "map_item": self._universal_string("false"),
+                "glowing": self._universal_string("true" if glowing else "false"),
+            },
+        )
+
+    def _make_item_frame_nbt(self, item_name: str):
+        """
+        Builds the item frame block entity NBT with one displayed block item.
+        """
+        if NBTFile is None:
+            raise RuntimeError("amulet_nbt is unavailable in this environment.")
+        if TAG_Compound is None or TAG_Byte is None or TAG_String is None or TAG_Short is None:
+            raise RuntimeError("amulet_nbt tag helpers are unavailable in this environment.")
+
+        the_nbt = TAG_Compound()
+        the_nbt["isMovable"] = TAG_Byte(1)
+
+        item = TAG_Compound()
+        item["Count"] = TAG_Byte(1)
+        item["Damage"] = TAG_Short(0)
+        item["Name"] = TAG_String(item_name)
+        item["WasPickedUp"] = TAG_Byte(0)
+
+        block = TAG_Compound()
+        block["name"] = TAG_String(item_name)
+        block["states"] = TAG_Compound()
+
+        if TAG_Int is not None:
+            block["version"] = TAG_Int(17841153)
+
+        item["Block"] = block
+        the_nbt["Item"] = item
+
+        if TAG_Float is not None:
+            the_nbt["ItemDropChance"] = TAG_Float(1.0)
+            the_nbt["ItemRotation"] = TAG_Float(0.0)
+
+        return NBTFile(the_nbt)
+
+    def _get_front_position(self, x: int, y: int, z: int, facing: str) -> Tuple[int, int, int]:
+        """
+        Returns the block position directly in front of a storage container.
+        """
+        if facing == "east":
+            return x + 1, y, z
+        if facing == "west":
+            return x - 1, y, z
+        if facing == "south":
+            return x, y, z + 1
+        if facing == "north":
+            return x, y, z - 1
+        return x, y, z
+
+    def _is_position_inside_bounds(
+        self,
+        x: int,
+        y: int,
+        z: int,
+        bounds: Tuple[int, int, int, int, int, int],
+    ) -> bool:
+        """
+        Checks if a position is inside the selected bounds.
+        """
+        min_x, min_y, min_z, max_x, max_y, max_z = bounds
+        return min_x <= x <= max_x and min_y <= y <= max_y and min_z <= z <= max_z
+
+    def _collect_storage_occupied_positions(self, use_double_chests: bool, storage_positions) -> Set[Tuple[int, int, int]]:
+        """
+        Builds a set of positions already occupied by generated storage blocks.
+        """
+        occupied: Set[Tuple[int, int, int]] = set()
+
+        if use_double_chests:
+            for first_pos, second_pos, pair_axis in storage_positions:
+                occupied.add(first_pos)
+                occupied.add(second_pos)
+        else:
+            for pos in storage_positions:
+                occupied.add(pos)
+
+        return occupied
+
+    def _place_group_item_frames(
+        self,
+        group_starts: Sequence[Tuple[str, int]],
+        storage_positions,
+        use_double_chests: bool,
+        bounds: Tuple[int, int, int, int, int, int],
+        protected_positions: Set[Tuple[int, int, int]],
+    ) -> Tuple[int, int]:
+        """
+        Places one item frame at the first storage unit of each separated block type group.
+        """
+        if not self.separate_types.GetValue():
+            return 0, 0
+
+        if not self.add_group_item_frames.GetValue():
+            return 0, 0
+
+        chunk_cache = {}
+        storage_occupied_positions = self._collect_storage_occupied_positions(use_double_chests, storage_positions)
+
+        placed_frames = 0
+        skipped_frames = 0
+
+        for item_name, storage_index in group_starts:
+            try:
+                if use_double_chests:
+                    first_pos, second_pos, pair_axis = storage_positions[storage_index]
+                    x, y, z = first_pos
+                    sx2, sy2, sz2 = second_pos
+                    facing = self._get_double_chest_facing(pair_axis, x, z, sx2, sz2, bounds)
+                else:
+                    x, y, z = storage_positions[storage_index]
+                    facing = self._get_inward_facing(x, z, bounds)
+
+                frame_x, frame_y, frame_z = self._get_front_position(x, y, z, facing)
+
+                if not self._is_position_inside_bounds(frame_x, frame_y, frame_z, bounds):
+                    skipped_frames += 1
+                    continue
+
+                if self._is_protected_position(frame_x, frame_y, frame_z, protected_positions):
+                    skipped_frames += 1
+                    continue
+
+                if (frame_x, frame_y, frame_z) in storage_occupied_positions:
+                    skipped_frames += 1
+                    continue
+
+                glowing = self._is_valuable_item_for_frame(item_name)
+                frame_block = self._make_universal_item_frame_block(facing=facing, glowing=glowing)
+                frame_nbt = self._make_item_frame_nbt(item_name)
+                entity_name = "GlowItemFrame" if glowing else "ItemFrame"
+                frame_entity = BlockEntity("", entity_name, frame_x, frame_y, frame_z, frame_nbt)
+
+                cx, cz = self._chunk_coords(frame_x, frame_z)
+                key = (cx, cz)
+
+                if key not in chunk_cache:
+                    chunk_cache[key] = self._get_chunk(cx, cz)
+
+                chunk = chunk_cache[key]
+                self._write_universal_block_to_chunk(
+                    chunk,
+                    frame_x,
+                    frame_y,
+                    frame_z,
+                    frame_block,
+                    frame_entity,
+                )
+                placed_frames += 1
+            except Exception:
+                skipped_frames += 1
+
+        return placed_frames, skipped_frames
+
+    # ---------------------------------------------------------------------
     # Button / Amulet operation wrapper
     # ---------------------------------------------------------------------
     def _run_export(self, _):
@@ -1654,7 +1881,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             total_blocks = sum(counts.values())
             total_skipped = sum(skipped_counts.values())
 
-            inventories = self._build_container_payloads(counts)
+            inventories, group_starts = self._build_container_payloads_and_group_starts(counts)
             container_count = len(inventories)
 
             if use_double_chests:
@@ -1680,6 +1907,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             self._log(f"Vertical stack height: {self.stack_height.GetValue()}")
             self._log(f"ABC item order: {self.alphabetical_order.GetValue()}")
             self._log(f"One block type per storage group: {self.separate_types.GetValue()}")
+            self._log(f"Add item frames for separated groups: {self.add_group_item_frames.GetValue()}")
             self._log(f"Include unusual blocks: {self.include_unusual.GetValue()}")
             self._log(f"Preserve bedrock: {self.preserve_bedrock.GetValue()}")
             self._log(f"Protected bedrock positions: {len(protected_positions):,}")
@@ -1707,6 +1935,14 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 self._place_double_chests_in_chunks(storage_positions, inventories, bounds)
             else:
                 self._place_single_storage_in_chunks(storage_positions, inventories, bounds)
+
+            placed_item_frames, skipped_item_frames = self._place_group_item_frames(
+                group_starts,
+                storage_positions,
+                use_double_chests,
+                bounds,
+                protected_positions,
+            )
             place_time = time.perf_counter() - place_start
 
             edit_time = clear_time + place_time
@@ -1726,6 +1962,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
             self._log(f"Placed storage units: {container_count:,}")
             self._log(f"Placed physical storage blocks: {planned_physical_blocks:,}")
+            self._log(f"Placed item frames: {placed_item_frames:,}")
+            self._log(f"Skipped item frames: {skipped_item_frames:,}")
             self._log(f"Place time: {self._format_seconds(place_time)}")
             self._log(f"Placement speed: {self._format_rate(planned_physical_blocks, place_time, 'storage blocks')}")
 
