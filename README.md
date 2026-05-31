@@ -50,8 +50,7 @@ If the folders do not exist yet, create them manually.
 
 ## Cost
 
-These plugins are free from the original maintainer. 
-Donations may be accepted, but there is no required payment or forced paywall from the original maintainer.
+These plugins are free from the original maintainer. Donations may be accepted, but there is no required payment or forced paywall.
 
 ## Official Source
 
