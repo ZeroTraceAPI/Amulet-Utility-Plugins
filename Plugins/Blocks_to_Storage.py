@@ -1,5 +1,4 @@
 import collections
-import math
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple, Set
@@ -48,6 +47,11 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     PROGRESS_INTERVAL = 500000
     LARGE_SELECTION_WARNING_THRESHOLD = 500000
+    DEFAULT_GROUP_SPACING = 1
+    MAX_GROUP_SPACING = 8
+    SETTINGS_PANEL_MIN_HEIGHT = 360
+    SETTINGS_PANEL_DEFAULT_HEIGHT = 440
+    SETTINGS_PANEL_MAX_HEIGHT = 620
 
     CONTAINER_CHEST = "Chest"
     CONTAINER_BARREL = "Barrel"
@@ -90,6 +94,71 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:budding_amethyst",
     }
 
+    AMBIGUOUS_FAST_SCAN_BLOCKS = {
+        "minecraft:plant",
+        "minecraft:double_plant",
+        "minecraft:leaves",
+        "minecraft:leaves2",
+        "minecraft:log",
+        "minecraft:log2",
+        "minecraft:fence",
+        "minecraft:planks",
+        "minecraft:wood",
+        "minecraft:stone_slab",
+        "minecraft:stone_slab2",
+        "minecraft:stone_slab3",
+        "minecraft:stone_slab4",
+        "minecraft:double_stone_slab",
+        "minecraft:double_stone_slab2",
+        "minecraft:double_stone_slab3",
+        "minecraft:double_stone_slab4",
+        "minecraft:infested_block",
+        "minecraft:magma",
+        "minecraft:magma_block",
+        "minecraft:spawner",
+        "minecraft:mob_spawner",
+        "minecraft:cobweb",
+        "minecraft:web",
+        "minecraft:slab",
+        "minecraft:double_slab",
+        "minecraft:wooden_slab",
+        "minecraft:double_wooden_slab",
+        "minecraft:stairs",
+    }
+
+    GENERIC_UNSAFE_ITEM_BLOCKS = {
+        "minecraft:slab",
+        "minecraft:double_slab",
+        "minecraft:wooden_slab",
+        "minecraft:double_wooden_slab",
+        "minecraft:stairs",
+        "minecraft:magma",
+        "minecraft:plant",
+        "minecraft:double_plant",
+        "minecraft:leaves",
+        "minecraft:leaves2",
+        "minecraft:log",
+        "minecraft:log2",
+        "minecraft:fence",
+        "minecraft:planks",
+        "minecraft:wood",
+        "minecraft:stone_slab",
+        "minecraft:stone_slab2",
+        "minecraft:stone_slab3",
+        "minecraft:stone_slab4",
+        "minecraft:double_stone_slab",
+        "minecraft:double_stone_slab2",
+        "minecraft:double_stone_slab3",
+        "minecraft:double_stone_slab4",
+        "minecraft:infested_block",
+    }
+
+    ITEM_NAME_OVERRIDES = {
+        "minecraft:fire_fly_bush": "minecraft:firefly_bush",
+    }
+
+    KNOWN_UNSAFE_ITEM_BLOCKS = set()
+
     AIR_BLOCKS = {
         "minecraft:air",
         "minecraft:cave_air",
@@ -121,6 +190,11 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:chain_command_block",
         "minecraft:structure_block",
         "minecraft:jigsaw",
+        "minecraft:mob_spawner",
+        "minecraft:spawner",
+        "minecraft:monster_spawner",
+        "minecraft:trial_spawner",
+        "minecraft:vault",
     }
 
     def __init__(
@@ -144,18 +218,27 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._fast_scan_fail_reason = ""
         self._fast_clear_failed = False
         self._fast_clear_fail_reason = ""
+        self._ambiguous_fast_scan_fallbacks = 0
 
         self._configure_tooltips()
 
         self._sizer = wx.BoxSizer(wx.VERTICAL)
 
-        title = wx.StaticText(self, label="Blocks to Storage")
-        self._sizer.Add(title, 0, wx.ALL, 6)
+        self.settings_panel = wx.ScrolledWindow(self, style=wx.VSCROLL)
+        self.settings_panel.SetScrollRate(0, 20)
+        self.settings_panel.SetMinSize((320, self.SETTINGS_PANEL_MIN_HEIGHT))
+        self.settings_panel.SetInitialSize((-1, self.SETTINGS_PANEL_DEFAULT_HEIGHT))
+        self.settings_sizer = wx.BoxSizer(wx.VERTICAL)
+        self.settings_panel.SetSizer(self.settings_sizer)
+        self.Bind(wx.EVT_SIZE, self._on_panel_resized)
+
+        title = wx.StaticText(self.settings_panel, label="Blocks to Storage")
+        self.settings_sizer.Add(title, 0, wx.ALL, 6)
 
         container_row = wx.BoxSizer(wx.HORIZONTAL)
-        container_label = wx.StaticText(self, label="Storage container")
+        container_label = wx.StaticText(self.settings_panel, label="Storage container")
         self.storage_choice = wx.Choice(
-            self,
+            self.settings_panel,
             choices=[
                 self.CONTAINER_CHEST,
                 self.CONTAINER_BARREL,
@@ -167,21 +250,21 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         container_row.Add(container_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
         container_row.Add(self.storage_choice, 1)
-        self._sizer.Add(container_row, 0, wx.ALL | wx.EXPAND, 6)
+        self.settings_sizer.Add(container_row, 0, wx.ALL | wx.EXPAND, 6)
 
         self.shulker_color_row = wx.BoxSizer(wx.HORIZONTAL)
-        shulker_color_label = wx.StaticText(self, label="Shulker color")
-        self.shulker_color_choice = wx.Choice(self, choices=self.SHULKER_COLORS)
+        shulker_color_label = wx.StaticText(self.settings_panel, label="Shulker color")
+        self.shulker_color_choice = wx.Choice(self.settings_panel, choices=self.SHULKER_COLORS)
         self.shulker_color_choice.SetSelection(0)
 
         self.shulker_color_row.Add(shulker_color_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
         self.shulker_color_row.Add(self.shulker_color_choice, 1)
-        self._sizer.Add(self.shulker_color_row, 0, wx.ALL | wx.EXPAND, 6)
+        self.settings_sizer.Add(self.shulker_color_row, 0, wx.ALL | wx.EXPAND, 6)
 
         stack_row = wx.BoxSizer(wx.HORIZONTAL)
-        stack_label = wx.StaticText(self, label="Vertical stack height")
+        stack_label = wx.StaticText(self.settings_panel, label="Vertical stack height")
         self.stack_height = wx.SpinCtrl(
-            self,
+            self.settings_panel,
             min=1,
             max=self.MAX_STACK_HEIGHT,
             initial=self.DEFAULT_STACK_HEIGHT,
@@ -189,44 +272,59 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         )
         stack_row.Add(stack_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
         stack_row.Add(self.stack_height, 0)
-        self._sizer.Add(stack_row, 0, wx.ALL, 6)
+        self.settings_sizer.Add(stack_row, 0, wx.ALL, 6)
 
-        self.include_unusual = wx.CheckBox(self, label="Include unusual blocks")
+        self.include_unusual = wx.CheckBox(self.settings_panel, label="Include unusual blocks")
         self.include_unusual.SetValue(False)
-        self._sizer.Add(self.include_unusual, 0, wx.ALL, 6)
+        self.settings_sizer.Add(self.include_unusual, 0, wx.ALL, 6)
 
-        self.preserve_bedrock = wx.CheckBox(self, label="Preserve bedrock")
+        self.preserve_bedrock = wx.CheckBox(self.settings_panel, label="Preserve bedrock")
         self.preserve_bedrock.SetValue(True)
-        self._sizer.Add(self.preserve_bedrock, 0, wx.ALL, 6)
+        self.settings_sizer.Add(self.preserve_bedrock, 0, wx.ALL, 6)
 
-        self.fast_direct_scan = wx.CheckBox(self, label="Fast direct chunk scan")
+        self.fast_direct_scan = wx.CheckBox(self.settings_panel, label="Fast direct chunk scan")
         self.fast_direct_scan.SetValue(True)
-        self._sizer.Add(self.fast_direct_scan, 0, wx.ALL, 6)
+        self.settings_sizer.Add(self.fast_direct_scan, 0, wx.ALL, 6)
 
-        self.fast_direct_clear = wx.CheckBox(self, label="Fast direct chunk clear")
+        self.fast_direct_clear = wx.CheckBox(self.settings_panel, label="Fast direct chunk clear")
         self.fast_direct_clear.SetValue(True)
-        self._sizer.Add(self.fast_direct_clear, 0, wx.ALL, 6)
+        self.settings_sizer.Add(self.fast_direct_clear, 0, wx.ALL, 6)
 
-        self.show_large_selection_warning = wx.CheckBox(self, label="Show large selection warning")
+        self.show_large_selection_warning = wx.CheckBox(self.settings_panel, label="Show large selection warning")
         self.show_large_selection_warning.SetValue(True)
-        self._sizer.Add(self.show_large_selection_warning, 0, wx.ALL, 6)
+        self.settings_sizer.Add(self.show_large_selection_warning, 0, wx.ALL, 6)
 
-        self.separate_types = wx.CheckBox(self, label="One block type per storage group")
+        self.separate_types = wx.CheckBox(self.settings_panel, label="One block type per storage group")
         self.separate_types.SetValue(False)
         self.separate_types.Bind(wx.EVT_CHECKBOX, self._on_separate_types_changed)
-        self._sizer.Add(self.separate_types, 0, wx.ALL, 6)
+        self.settings_sizer.Add(self.separate_types, 0, wx.ALL, 6)
 
-        self.add_group_item_frames = wx.CheckBox(self, label="Add item frames for separated groups")
+        self.add_group_item_frames = wx.CheckBox(self.settings_panel, label="Add item frames for separated groups")
         self.add_group_item_frames.SetValue(False)
-        self._sizer.Add(self.add_group_item_frames, 0, wx.ALL, 6)
+        self.settings_sizer.Add(self.add_group_item_frames, 0, wx.ALL, 6)
 
-        self.alphabetical_order = wx.CheckBox(self, label="ABC item order")
+        group_spacing_row = wx.BoxSizer(wx.HORIZONTAL)
+        self.group_spacing_label = wx.StaticText(self.settings_panel, label="Spacing between separated groups")
+        self.group_spacing = wx.SpinCtrl(
+            self.settings_panel,
+            min=0,
+            max=self.MAX_GROUP_SPACING,
+            initial=self.DEFAULT_GROUP_SPACING,
+            size=(80, -1),
+        )
+        group_spacing_row.Add(self.group_spacing_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        group_spacing_row.Add(self.group_spacing, 0)
+        self.settings_sizer.Add(group_spacing_row, 0, wx.ALL, 6)
+
+        self.alphabetical_order = wx.CheckBox(self.settings_panel, label="ABC item order")
         self.alphabetical_order.SetValue(True)
-        self._sizer.Add(self.alphabetical_order, 0, wx.ALL, 6)
+        self.settings_sizer.Add(self.alphabetical_order, 0, wx.ALL, 6)
 
-        self.use_double_chests = wx.CheckBox(self, label="Use double chests")
+        self.use_double_chests = wx.CheckBox(self.settings_panel, label="Use double chests")
         self.use_double_chests.SetValue(False)
-        self._sizer.Add(self.use_double_chests, 0, wx.ALL, 6)
+        self.settings_sizer.Add(self.use_double_chests, 0, wx.ALL, 6)
+
+        self._sizer.Add(self.settings_panel, 0, wx.ALL | wx.EXPAND, 0)
 
         self.test = wx.Button(self, label="Delete Blocks to Storage")
         self.test.Bind(wx.EVT_BUTTON, self._run_export)
@@ -248,7 +346,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._sizer.Add(self.text, 1, wx.ALL | wx.EXPAND, 6)
 
         self.SetSizer(self._sizer)
-        self.SetMinSize((380, 580))
+        self.SetMinSize((380, 700))
 
         self._set_tooltip(
             container_label,
@@ -301,6 +399,14 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._set_tooltip(
             self.add_group_item_frames,
             "Only works when One block type per storage group is enabled. Adds one regular item frame or glow item frame to the first storage container for each block type group.",
+        )
+        self._set_tooltip(
+            self.group_spacing_label,
+            "Controls the empty side space between separated block groups. Only applies when One block type per storage group is enabled. Item frames automatically reserve front space separately.",
+        )
+        self._set_tooltip(
+            self.group_spacing,
+            "Controls the empty side space between separated block groups. Range is 0 to 8. Default is 1. Item frames automatically reserve front space separately.",
         )
         self._set_tooltip(
             self.alphabetical_order,
@@ -371,6 +477,35 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     def _on_separate_types_changed(self, _):
         self._update_option_visibility()
 
+    def _on_panel_resized(self, event) -> None:
+        self._resize_settings_panel()
+        try:
+            event.Skip()
+        except Exception:
+            pass
+
+    def _resize_settings_panel(self) -> None:
+        try:
+            width, height = self.GetClientSize()
+        except Exception:
+            return
+
+        if height <= 0:
+            return
+
+        target_height = int(height * 0.48)
+        target_height = max(self.SETTINGS_PANEL_MIN_HEIGHT, target_height)
+        target_height = min(self.SETTINGS_PANEL_MAX_HEIGHT, target_height)
+
+        try:
+            self.settings_panel.SetMinSize((320, target_height))
+            self.settings_panel.SetInitialSize((-1, target_height))
+            self.settings_panel.FitInside()
+            self.settings_panel.Layout()
+            self.Layout()
+        except Exception:
+            pass
+
     def _update_option_visibility(self) -> None:
         container = self._get_selected_container()
 
@@ -380,6 +515,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         self.use_double_chests.Show(is_chest)
         self.add_group_item_frames.Show(separate_groups_enabled)
+        self.group_spacing_label.Show(separate_groups_enabled)
+        self.group_spacing.Show(separate_groups_enabled)
 
         if not separate_groups_enabled:
             self.add_group_item_frames.SetValue(False)
@@ -393,6 +530,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             self.use_double_chests.SetValue(False)
 
         try:
+            self.settings_panel.FitInside()
+            self._resize_settings_panel()
             self.Layout()
             self.GetParent().Layout()
         except Exception:
@@ -641,6 +780,34 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return "left", "right"
 
+    def _get_double_chest_left_right(
+        self,
+        first_pos: Tuple[int, int, int],
+        second_pos: Tuple[int, int, int],
+        pair_axis: str,
+        facing: str,
+    ) -> Tuple[Tuple[int, int, int], Tuple[int, int, int], str, str]:
+        connection_1, connection_2 = self._get_double_chest_connections(pair_axis, facing)
+
+        x1, y1, z1 = first_pos
+        x2, y2, z2 = second_pos
+
+        first_is_visual_left = True
+
+        if facing == "east":
+            first_is_visual_left = z1 > z2
+        elif facing == "west":
+            first_is_visual_left = z1 < z2
+        elif facing == "south":
+            first_is_visual_left = x1 < x2
+        elif facing == "north":
+            first_is_visual_left = x1 > x2
+
+        if first_is_visual_left:
+            return first_pos, second_pos, connection_1, connection_2
+
+        return second_pos, first_pos, connection_2, connection_1
+
     def _normalize_name(self, value) -> str:
         text = str(value) if value is not None else ""
         if not text:
@@ -670,16 +837,39 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         if key is None:
             return None, "unknown_block"
 
+        key = self.ITEM_NAME_OVERRIDES.get(key, key)
+
         if key in self.AIR_BLOCKS or key.endswith(":air"):
             return None, None
 
         if key == "minecraft:bedrock":
             return None, key
 
+        if key in self.KNOWN_UNSAFE_ITEM_BLOCKS:
+            return None, key
+
         if not self.include_unusual.GetValue() and key in self.DEFAULT_EXCLUDED_BLOCKS:
             return None, key
 
         return key, None
+
+    def _is_safe_item_key(self, item_name: Optional[str]) -> bool:
+        if item_name is None:
+            return False
+
+        item_name = str(item_name)
+        item_name = self.ITEM_NAME_OVERRIDES.get(item_name, item_name)
+
+        if not item_name.strip():
+            return False
+
+        if item_name in self.KNOWN_UNSAFE_ITEM_BLOCKS:
+            return False
+
+        if item_name in self.GENERIC_UNSAFE_ITEM_BLOCKS:
+            return False
+
+        return True
 
     def _universal_string(self, value: str):
         if StringTag is not None:
@@ -752,6 +942,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self,
         stacks: Sequence[Tuple[str, int]],
         pair_position: Optional[Tuple[int, int]] = None,
+        pair_lead: Optional[bool] = None,
     ):
         if NBTFile is None:
             raise RuntimeError("amulet_nbt is unavailable in this environment.")
@@ -768,7 +959,13 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             the_nbt["pairx"] = TAG_Int(int(pair_x))
             the_nbt["pairz"] = TAG_Int(int(pair_z))
 
+        if pair_lead is not None:
+            the_nbt["pairlead"] = TAG_Byte(1 if pair_lead else 0)
+
         for slot, (item_name, count) in enumerate(stacks):
+            if not str(item_name).strip():
+                continue
+
             item = TAG_Compound()
             item["Slot"] = TAG_Byte(int(slot))
             item["Name"] = TAG_String(item_name)
@@ -804,6 +1001,11 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     def _split_into_stacks(self, item_name: str, total_count: int) -> List[Tuple[str, int]]:
         stacks: List[Tuple[str, int]] = []
+        item_name = self.ITEM_NAME_OVERRIDES.get(item_name, item_name)
+
+        if not self._is_safe_item_key(item_name):
+            return stacks
+
         remaining = int(total_count)
 
         while remaining > 0:
@@ -832,10 +1034,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return containers
 
-    def _build_container_payloads(self, counts: Dict[str, int]) -> List[List[Tuple[str, int]]]:
-        payloads, group_starts = self._build_container_payloads_and_group_starts(counts)
-        return payloads
-
     def _build_container_payloads_and_group_starts(
         self,
         counts: Dict[str, int],
@@ -847,10 +1045,13 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         if self.separate_types.GetValue():
             for item_name in item_names:
+                stacks = self._split_into_stacks(item_name, counts[item_name])
+                if not stacks:
+                    continue
                 group_starts.append((item_name, len(payloads)))
                 payloads.extend(
                     self._pack_stacks_into_containers(
-                        self._split_into_stacks(item_name, counts[item_name]),
+                        stacks,
                         slot_count,
                     )
                 )
@@ -926,6 +1127,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 self._fast_scan_fail_reason = str(exc)
                 self._log(f"Fast direct chunk scan failed. Falling back to safe scan. Reason: {exc}")
 
+        return self._get_block_safe_for_scan(x, y, z)
+
+    def _get_block_safe_for_scan(self, x: int, y: int, z: int):
         block, ent = self.world.get_version_block(
             x,
             y,
@@ -999,6 +1203,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._scan_order = []
         self._fast_scan_failed = False
         self._fast_scan_fail_reason = ""
+        self._ambiguous_fast_scan_fallbacks = 0
 
         min_x = min_y = min_z = None
         max_x = max_y = max_z = None
@@ -1032,6 +1237,22 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             block = self._get_block_for_scan(x, y, z, chunk_cache)
             export_key, skipped_key = self._classify_block(block)
 
+            if export_key in self.AMBIGUOUS_FAST_SCAN_BLOCKS:
+                try:
+                    safe_block = self._get_block_safe_for_scan(x, y, z)
+                    safe_export_key, safe_skipped_key = self._classify_block(safe_block)
+
+                    if safe_export_key is not None or safe_skipped_key is not None:
+                        export_key = safe_export_key
+                        skipped_key = safe_skipped_key
+                        self._ambiguous_fast_scan_fallbacks += 1
+                except Exception:
+                    pass
+
+            if export_key is not None and not self._is_safe_item_key(export_key):
+                skipped_key = export_key
+                export_key = None
+
             if skipped_key == "minecraft:bedrock" and self.preserve_bedrock.GetValue():
                 protected_positions.add((x, y, z))
 
@@ -1060,6 +1281,33 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         protected_positions: Set[Tuple[int, int, int]],
     ) -> bool:
         return (x, y, z) in protected_positions
+
+    def _get_group_spacing_value(self) -> int:
+        try:
+            return max(0, min(self.MAX_GROUP_SPACING, int(self.group_spacing.GetValue())))
+        except Exception:
+            return self.DEFAULT_GROUP_SPACING
+
+    def _get_front_line_stride(self) -> int:
+        if self.separate_types.GetValue() and self.add_group_item_frames.GetValue():
+            return 3
+        return 1
+
+    def _get_group_ranges(
+        self,
+        group_starts: Sequence[Tuple[str, int]],
+        container_count: int,
+    ) -> List[Tuple[str, int, int]]:
+        ranges: List[Tuple[str, int, int]] = []
+
+        for index, (item_name, start_index) in enumerate(group_starts):
+            if index + 1 < len(group_starts):
+                end_index = int(group_starts[index + 1][1])
+            else:
+                end_index = int(container_count)
+            ranges.append((item_name, int(start_index), end_index))
+
+        return ranges
 
     def _plan_single_storage_positions(
         self,
@@ -1116,6 +1364,108 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             f"Protected bedrock positions may be blocking storage placement."
         )
 
+    def _plan_single_storage_positions_by_group(
+        self,
+        group_starts: Sequence[Tuple[str, int]],
+        container_count: int,
+        bounds: Tuple[int, int, int, int, int, int],
+        protected_positions: Set[Tuple[int, int, int]],
+    ) -> List[Tuple[int, int, int]]:
+        min_x, min_y, min_z, max_x, max_y, max_z = bounds
+
+        x_len = (max_x - min_x) + 1
+        y_len = (max_y - min_y) + 1
+        z_len = (max_z - min_z) + 1
+
+        stack_height = int(self.stack_height.GetValue())
+        stack_height = max(1, min(self.MAX_STACK_HEIGHT, stack_height))
+        stack_height = min(stack_height, y_len)
+
+        if x_len <= z_len:
+            primary_axis = "x"
+            primary_len = x_len
+            secondary_len = z_len
+        else:
+            primary_axis = "z"
+            primary_len = z_len
+            secondary_len = x_len
+
+        group_spacing = self._get_group_spacing_value()
+        front_line_stride = self._get_front_line_stride()
+
+        if group_spacing >= primary_len and len(group_starts) > 1:
+            raise RuntimeError(
+                "Not enough side room for the selected separated-group spacing. "
+                f"Primary row length is {primary_len} block(s), but spacing is set to {group_spacing}. "
+                "Increase the selected area size or reduce the spacing between separated groups."
+            )
+
+        positions: List[Tuple[int, int, int]] = [None] * container_count
+        group_ranges = self._get_group_ranges(group_starts, container_count)
+
+        current_line = 0
+        current_primary = 0
+
+        def make_pos(primary_offset: int, line_index: int, vertical_offset: int) -> Tuple[int, int, int]:
+            y = min_y + vertical_offset
+            if primary_axis == "x":
+                return min_x + primary_offset, y, min_z + line_index
+            return min_x + line_index, y, min_z + primary_offset
+
+        for item_name, start_index, end_index in group_ranges:
+            group_needed = end_index - start_index
+            group_placed = 0
+
+            while group_placed < group_needed:
+                if current_line >= secondary_len:
+                    raise RuntimeError(
+                        "Not enough room in the selected area for separated storage groups with the current spacing. "
+                        "Increase the selected area size, reduce the spacing between separated groups, reduce vertical stack height, or disable item frames."
+                    )
+
+                if current_primary >= primary_len:
+                    current_line += front_line_stride
+                    current_primary = 0
+                    continue
+
+                for vertical_offset in range(stack_height):
+                    if group_placed >= group_needed:
+                        break
+
+                    x, y, z = make_pos(current_primary, current_line, vertical_offset)
+
+                    if self._is_protected_position(x, y, z, protected_positions):
+                        continue
+
+                    positions[start_index + group_placed] = (x, y, z)
+                    group_placed += 1
+
+                current_primary += 1
+
+            current_primary += group_spacing
+            if current_primary >= primary_len:
+                current_line += front_line_stride
+                current_primary = 0
+
+        if any(pos is None for pos in positions):
+            raise RuntimeError("Storage placement failed because one or more separated group positions could not be planned.")
+
+        return positions
+
+    def _choose_double_chest_axis(self, x_len: int, z_len: int) -> str:
+        if x_len >= 2 and z_len >= 2:
+            if x_len <= z_len:
+                return "x"
+            return "z"
+
+        if x_len >= 2:
+            return "x"
+
+        if z_len >= 2:
+            return "z"
+
+        raise RuntimeError("Not enough horizontal room for double chests.")
+
     def _plan_double_chest_positions(
         self,
         container_count: int,
@@ -1137,16 +1487,14 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         if container_count <= 0:
             return pairs
 
-        if x_len >= 2:
-            pair_axis = "x"
+        pair_axis = self._choose_double_chest_axis(x_len, z_len)
+
+        if pair_axis == "x":
             primary_len = x_len // 2
             secondary_len = z_len
-        elif z_len >= 2:
-            pair_axis = "z"
+        else:
             primary_len = z_len // 2
             secondary_len = x_len
-        else:
-            raise RuntimeError("Not enough horizontal room for double chests.")
 
         for line_index in range(secondary_len):
             for primary_offset in range(primary_len):
@@ -1179,6 +1527,103 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             f"Not enough non-protected room in the selected area for {container_count} double chests. "
             f"Protected bedrock positions may be blocking storage placement."
         )
+
+    def _plan_double_chest_positions_by_group(
+        self,
+        group_starts: Sequence[Tuple[str, int]],
+        container_count: int,
+        bounds: Tuple[int, int, int, int, int, int],
+        protected_positions: Set[Tuple[int, int, int]],
+    ) -> List[Tuple[Tuple[int, int, int], Tuple[int, int, int], str]]:
+        min_x, min_y, min_z, max_x, max_y, max_z = bounds
+
+        x_len = (max_x - min_x) + 1
+        y_len = (max_y - min_y) + 1
+        z_len = (max_z - min_z) + 1
+
+        stack_height = int(self.stack_height.GetValue())
+        stack_height = max(1, min(self.MAX_STACK_HEIGHT, stack_height))
+        stack_height = min(stack_height, y_len)
+
+        pair_axis = self._choose_double_chest_axis(x_len, z_len)
+
+        if pair_axis == "x":
+            primary_block_len = x_len
+            secondary_len = z_len
+        else:
+            primary_block_len = z_len
+            secondary_len = x_len
+
+        group_spacing = self._get_group_spacing_value()
+        front_line_stride = self._get_front_line_stride()
+
+        if group_spacing >= primary_block_len and len(group_starts) > 1:
+            raise RuntimeError(
+                "Not enough side room for the selected separated-group spacing. "
+                f"Primary row length is {primary_block_len} block(s), but spacing is set to {group_spacing}. "
+                "Increase the selected area size or reduce the spacing between separated groups."
+            )
+
+        pairs: List[Optional[Tuple[Tuple[int, int, int], Tuple[int, int, int], str]]] = [None] * container_count
+        group_ranges = self._get_group_ranges(group_starts, container_count)
+
+        current_line = 0
+        current_primary_block = 0
+
+        def make_pair(primary_block_offset: int, line_index: int, vertical_offset: int):
+            y = min_y + vertical_offset
+            if pair_axis == "x":
+                x1 = min_x + primary_block_offset
+                z1 = min_z + line_index
+                return (x1, y, z1), (x1 + 1, y, z1), pair_axis
+            x1 = min_x + line_index
+            z1 = min_z + primary_block_offset
+            return (x1, y, z1), (x1, y, z1 + 1), pair_axis
+
+        for item_name, start_index, end_index in group_ranges:
+            group_needed = end_index - start_index
+            group_placed = 0
+
+            while group_placed < group_needed:
+                if current_line >= secondary_len:
+                    raise RuntimeError(
+                        "Not enough room in the selected area for separated double-chest groups with the current spacing. "
+                        "Increase the selected area size, reduce the spacing between separated groups, reduce vertical stack height, or disable item frames."
+                    )
+
+                if current_primary_block + 1 >= primary_block_len:
+                    current_line += front_line_stride
+                    current_primary_block = 0
+                    continue
+
+                for vertical_offset in range(stack_height):
+                    if group_placed >= group_needed:
+                        break
+
+                    first_pos, second_pos, planned_pair_axis = make_pair(current_primary_block, current_line, vertical_offset)
+                    x1, y1, z1 = first_pos
+                    x2, y2, z2 = second_pos
+
+                    if self._is_protected_position(x1, y1, z1, protected_positions):
+                        continue
+
+                    if self._is_protected_position(x2, y2, z2, protected_positions):
+                        continue
+
+                    pairs[start_index + group_placed] = (first_pos, second_pos, planned_pair_axis)
+                    group_placed += 1
+
+                current_primary_block += 2
+
+            current_primary_block += group_spacing
+            if current_primary_block + 1 >= primary_block_len:
+                current_line += front_line_stride
+                current_primary_block = 0
+
+        if any(pair is None for pair in pairs):
+            raise RuntimeError("Double-chest placement failed because one or more separated group positions could not be planned.")
+
+        return pairs
 
     def _clear_selection_safe(
         self,
@@ -1337,25 +1782,43 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     ) -> None:
         chunk_cache = {}
 
-        for ((x1, y1, z1), (x2, y2, z2), pair_axis), stacks in zip(chest_pairs, chest_inventories):
+        for (first_pos, second_pos, pair_axis), stacks in zip(chest_pairs, chest_inventories):
+            x1, y1, z1 = first_pos
+            x2, y2, z2 = second_pos
             facing = self._get_double_chest_facing(pair_axis, x1, z1, x2, z2, bounds)
-            connection_1, connection_2 = self._get_double_chest_connections(pair_axis, facing)
+            left_pos, right_pos, left_connection, right_connection = self._get_double_chest_left_right(
+                first_pos,
+                second_pos,
+                pair_axis,
+                facing,
+            )
 
-            first_half = list(stacks[:self.SINGLE_CONTAINER_SLOT_COUNT])
-            second_half = list(stacks[self.SINGLE_CONTAINER_SLOT_COUNT:])
+            left_x, left_y, left_z = left_pos
+            right_x, right_y, right_z = right_pos
 
-            nbt_1 = self._make_inventory_nbt(first_half, pair_position=(x2, z2))
-            nbt_2 = self._make_inventory_nbt(second_half, pair_position=(x1, z1))
+            left_half = list(stacks[:self.SINGLE_CONTAINER_SLOT_COUNT])
+            right_half = list(stacks[self.SINGLE_CONTAINER_SLOT_COUNT:])
 
-            entity_1 = BlockEntity("universal_minecraft", "chest", x1, y1, z1, nbt_1)
-            entity_2 = BlockEntity("universal_minecraft", "chest", x2, y2, z2, nbt_2)
+            left_nbt = self._make_inventory_nbt(
+                left_half,
+                pair_position=(right_x, right_z),
+                pair_lead=True,
+            )
+            right_nbt = self._make_inventory_nbt(
+                right_half,
+                pair_position=(left_x, left_z),
+                pair_lead=False,
+            )
 
-            chest_1 = self._make_universal_chest(facing=facing, connection=connection_1)
-            chest_2 = self._make_universal_chest(facing=facing, connection=connection_2)
+            left_entity = BlockEntity("universal_minecraft", "chest", left_x, left_y, left_z, left_nbt)
+            right_entity = BlockEntity("universal_minecraft", "chest", right_x, right_y, right_z, right_nbt)
+
+            left_chest = self._make_universal_chest(facing=facing, connection=left_connection)
+            right_chest = self._make_universal_chest(facing=facing, connection=right_connection)
 
             for x, y, z, chest_block, chest_entity in (
-                (x1, y1, z1, chest_1, entity_1),
-                (x2, y2, z2, chest_2, entity_2),
+                (left_x, left_y, left_z, left_chest, left_entity),
+                (right_x, right_y, right_z, right_chest, right_entity),
             ):
                 cx, cz = self._chunk_coords(x, z)
                 key = (cx, cz)
@@ -1392,6 +1855,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             raise RuntimeError("amulet_nbt is unavailable in this environment.")
         if TAG_Compound is None or TAG_Byte is None or TAG_String is None or TAG_Short is None:
             raise RuntimeError("amulet_nbt tag helpers are unavailable in this environment.")
+
+        if not str(item_name).strip():
+            raise RuntimeError("Cannot create an item frame for an empty item name.")
 
         the_nbt = TAG_Compound()
         the_nbt["isMovable"] = TAG_Byte(1)
@@ -1473,12 +1939,23 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         skipped_frames = 0
 
         for item_name, storage_index in group_starts:
+            if not str(item_name).strip() or item_name in self.KNOWN_UNSAFE_ITEM_BLOCKS:
+                skipped_frames += 1
+                continue
+
             try:
                 if use_double_chests:
                     first_pos, second_pos, pair_axis = storage_positions[storage_index]
-                    x, y, z = first_pos
-                    sx2, sy2, sz2 = second_pos
-                    facing = self._get_double_chest_facing(pair_axis, x, z, sx2, sz2, bounds)
+                    x1, y1, z1 = first_pos
+                    x2, y2, z2 = second_pos
+                    facing = self._get_double_chest_facing(pair_axis, x1, z1, x2, z2, bounds)
+                    left_pos, right_pos, left_connection, right_connection = self._get_double_chest_left_right(
+                        first_pos,
+                        second_pos,
+                        pair_axis,
+                        facing,
+                    )
+                    x, y, z = left_pos
                 else:
                     x, y, z = storage_positions[storage_index]
                     facing = self._get_inward_facing(x, z, bounds)
@@ -1494,6 +1971,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                     continue
 
                 if (frame_x, frame_y, frame_z) in storage_occupied_positions:
+                    skipped_frames += 1
+                    continue
+
+                if item_name in self.AMBIGUOUS_FAST_SCAN_BLOCKS:
                     skipped_frames += 1
                     continue
 
@@ -1602,6 +2083,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             else:
                 self._log("Fast direct chunk scan result: disabled")
 
+            if self._ambiguous_fast_scan_fallbacks:
+                self._log(f"Ambiguous fast scan block fallbacks: {self._ambiguous_fast_scan_fallbacks:,}")
+
             if not counts:
                 self._log("No exportable blocks found.")
 
@@ -1624,10 +2108,26 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             container_count = len(inventories)
 
             if use_double_chests:
-                storage_positions = self._plan_double_chest_positions(container_count, bounds, protected_positions)
+                if self.separate_types.GetValue():
+                    storage_positions = self._plan_double_chest_positions_by_group(
+                        group_starts,
+                        container_count,
+                        bounds,
+                        protected_positions,
+                    )
+                else:
+                    storage_positions = self._plan_double_chest_positions(container_count, bounds, protected_positions)
                 planned_physical_blocks = len(storage_positions) * 2
             else:
-                storage_positions = self._plan_single_storage_positions(container_count, bounds, protected_positions)
+                if self.separate_types.GetValue():
+                    storage_positions = self._plan_single_storage_positions_by_group(
+                        group_starts,
+                        container_count,
+                        bounds,
+                        protected_positions,
+                    )
+                else:
+                    storage_positions = self._plan_single_storage_positions(container_count, bounds, protected_positions)
                 planned_physical_blocks = len(storage_positions)
 
             planning_time = time.perf_counter() - planning_start
@@ -1646,7 +2146,11 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             self._log(f"Vertical stack height: {self.stack_height.GetValue()}")
             self._log(f"ABC item order: {self.alphabetical_order.GetValue()}")
             self._log(f"One block type per storage group: {self.separate_types.GetValue()}")
+            if self.separate_types.GetValue():
+                self._log(f"Spacing between separated groups: {self._get_group_spacing_value()}")
             self._log(f"Add item frames for separated groups: {self.add_group_item_frames.GetValue()}")
+            if self.separate_types.GetValue() and self.add_group_item_frames.GetValue():
+                self._log("Item frame front clearance: 2 block(s)")
             self._log(f"Include unusual blocks: {self.include_unusual.GetValue()}")
             self._log(f"Preserve bedrock: {self.preserve_bedrock.GetValue()}")
             self._log(f"Protected bedrock positions: {len(protected_positions):,}")
