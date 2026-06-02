@@ -96,7 +96,7 @@ body:
     attributes:
       label: Plugin version / file name
       description: Enter the plugin version or exact file name you are using, if known.
-      placeholder: "Auto_light_v1.py"
+      placeholder: "Auto_Light_v1-1-0-0.py"
     validations:
       required: false
 
