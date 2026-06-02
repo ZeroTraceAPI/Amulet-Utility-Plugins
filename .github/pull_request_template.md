@@ -1,4 +1,8 @@
-> You may delete any part of this template if you want to start from a blank pull request description, except the **Contribution agreement** section. The **Contribution agreement** section should remain in the pull request. If you remove it, you must still clearly acknowledge that you have read, understand, and agree to the contribution agreement. Pull requests that do not include this acknowledgement may not be merged.
+> You may delete any part of this template if you want to start from a blank pull request description, except the **Contribution agreement** section.
+>
+> The **Contribution agreement** section should remain in the pull request. If you remove it, you must still clearly acknowledge that you have read, understand, and agree to the contribution terms in `CONTRIBUTING.md`.
+>
+> Pull requests that do not include this acknowledgement may not be merged.
 
 ## Summary
 
@@ -55,11 +59,11 @@ Testing notes:
 
 By submitting this pull request, I confirm that:
 
-* [ ] I have read and agree to the terms in [CONTRIBUTING.md](https://github.com/ZeroTraceAPI/Amulet-Utility-Plugins/blob/main/CONTRIBUTING.md).
+* [ ] I have read, understand, and agree to the contribution terms in [CONTRIBUTING.md](https://github.com/ZeroTraceAPI/Amulet-Utility-Plugins/blob/main/CONTRIBUTING.md).
 * [ ] I have the right to submit this contribution.
 * [ ] This contribution is my own work, or I have permission to submit it.
-* [ ] I understand that this contribution may be distributed under the current project license.
-* [ ] I understand that this contribution may be relicensed by the project maintainer under a future open-source license chosen for this project.
+* [ ] This contribution does not knowingly include code, text, media, assets, or other material that I do not have permission to share.
+* [ ] I understand that this contribution may be used, modified, distributed, and licensed according to the terms in `CONTRIBUTING.md`.
 
 ---
 
