@@ -87,6 +87,7 @@ This license does not transfer ownership of your Contribution to the Maintainer.
 If your Contribution is covered by patent rights that you own or control, you grant the Maintainer and Project users a worldwide, royalty-free, non-exclusive, perpetual, irrevocable patent license to make, use, modify, distribute, and otherwise work with your Contribution as part of the Project.
 
 This patent license only applies to patent claims that would be infringed by using your Contribution alone or by using your Contribution as part of the Project.
+
 This patent license does not apply to unrelated patents, inventions, or work outside this Project.
 
 ### 5. Current and future project licenses
@@ -122,6 +123,20 @@ Pull requests that do not include a clear acknowledgement of these terms may not
 
 The Maintainer may also require additional confirmation before merging a Contribution if the Contribution is large, complex, license-sensitive, or based on third-party material.
 
+### 9. Special licensing exceptions
+
+The default rule is that Contributions are submitted under this Contribution Agreement and the Project license.
+
+A Contributor may request different terms for a specific Contribution, such as a different open-source license, special attribution terms, or a limited permission grant. Any such request must be clearly stated before the Contribution is merged.
+
+A special licensing exception is only valid if the Maintainer clearly agrees to it in writing, such as in the pull request, a repository file, or another project-managed channel.
+
+The Maintainer may reject a special licensing exception if it would make the Project harder to use, modify, distribute, relicense, maintain, or legally review.
+
+Contributions marked as all rights reserved, private, restricted, or not licensed for open-source use will not normally be accepted unless the Maintainer and Contributor agree in writing to specific terms that allow the Project and its users to use, modify, and distribute that Contribution.
+
+If a special licensing exception is accepted, it should be documented clearly in the relevant file, pull request, license notice, or project documentation.
+
 ## Discussions, Issues, and Support
 
 Use GitHub Discussions for general questions, early ideas, help requests, and show-and-tell posts.
@@ -130,7 +145,6 @@ Use GitHub Issues for confirmed bugs, specific feature requests, and work that n
 
 When reporting bugs, include as much information as possible.
 
-
 ## License
 
-Unless stated otherwise, Contributions are submitted under the Project license and the Contribution Agreement above.
+Unless a special licensing exception is accepted in writing by the Maintainer, Contributions are submitted under the Project license and the Contribution Agreement above.
