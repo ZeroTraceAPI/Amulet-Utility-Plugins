@@ -119,6 +119,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:raw_copper_block",
         "minecraft:amethyst_block",
         "minecraft:budding_amethyst",
+        "minecraft:glow_frame",
     }
 
     # Fast direct chunk scan can expose older generic Bedrock block names.
@@ -155,6 +156,32 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:wooden_slab",
         "minecraft:double_wooden_slab",
         "minecraft:stairs",
+        "minecraft:bed",
+        "minecraft:item_frame_block",
+        "minecraft:frame",
+        "minecraft:glow_frame",
+        "minecraft:sticky_piston_head",
+        "minecraft:pitcher_crop",
+    }
+
+    # State-sensitive blocks are re-read with the safer Amulet lookup so the
+    # exporter can see details such as bed color, upper / lower halves, and
+    # special block states before deciding which item to create.
+    STATE_SENSITIVE_SCAN_BLOCKS = {
+        "minecraft:bed",
+        "minecraft:lilac",
+        "minecraft:peony",
+        "minecraft:rose_bush",
+        "minecraft:sunflower",
+        "minecraft:tall_grass",
+        "minecraft:large_fern",
+        "minecraft:tall_seagrass",
+        "minecraft:seagrass",
+        "minecraft:small_dripleaf",
+        "minecraft:small_dripleaf_block",
+        "minecraft:pitcher_plant",
+        "minecraft:pitcher_crop",
+        "minecraft:double_plant",
     }
 
     # Generic fallback names that should not be written directly as items.
@@ -192,13 +219,75 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     # empty / ghost item entries.
     ITEM_NAME_OVERRIDES = {
         "minecraft:fire_fly_bush": "minecraft:firefly_bush",
+        "minecraft:small_dripleaf": "minecraft:small_dripleaf_block",
+        "minecraft:item_frame_block": "minecraft:frame",
+    }
+
+    BED_COLOR_NAMES = [
+        "white",
+        "orange",
+        "magenta",
+        "light_blue",
+        "yellow",
+        "lime",
+        "pink",
+        "gray",
+        "light_gray",
+        "cyan",
+        "purple",
+        "blue",
+        "brown",
+        "green",
+        "red",
+        "black",
+    ]
+
+    BED_ITEM_DAMAGE_BY_COLOR = {
+        color_name: color_index for color_index, color_name in enumerate(BED_COLOR_NAMES)
+    }
+
+    BED_COLOR_BY_ITEM_NAME = {
+        f"minecraft:{color_name}_bed": color_name for color_name in BED_COLOR_NAMES
+    }
+
+    # Some inventory items use one Bedrock item name plus a damage value instead
+    # of one unique item ID per color or state.
+    ITEM_FRAME_NO_BLOCK_TAG_ITEMS = {
+        "minecraft:bed",
+        "minecraft:pitcher_pod",
+        "minecraft:frame",
+        "minecraft:glow_frame",
+    }
+
+    # These blocks have two physical block positions but should normally only
+    # export as one item. The upper half is ignored during counting.
+    DOUBLE_HEIGHT_DEDUP_BLOCKS = {
+        "minecraft:bed",
+        "minecraft:lilac",
+        "minecraft:peony",
+        "minecraft:rose_bush",
+        "minecraft:sunflower",
+        "minecraft:tall_grass",
+        "minecraft:large_fern",
+        "minecraft:tall_seagrass",
+        "minecraft:seagrass",
+        "minecraft:small_dripleaf",
+        "minecraft:small_dripleaf_block",
+        "minecraft:pitcher_plant",
+        "minecraft:pitcher_crop",
     }
 
     # Block names in this set are skipped even when Include unusual blocks is
     # enabled because they are not safe to write as item names. Keep this set
     # available for future edge cases, but do not add blocks here unless they
     # are confirmed to create invalid storage or item frame entries.
-    KNOWN_UNSAFE_ITEM_BLOCKS = set()
+    KNOWN_UNSAFE_ITEM_BLOCKS = {
+        "minecraft:piston_head",
+        "minecraft:sticky_piston_head",
+        "minecraft:piston_arm_collision",
+        "minecraft:moving_piston",
+        "minecraft:moving_block",
+    }
 
     # Air-like blocks are ignored completely because there is nothing to collect.
     AIR_BLOCKS = {
@@ -217,7 +306,20 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:flowing_water",
         "minecraft:lava",
         "minecraft:flowing_lava",
+        "minecraft:budding_amethyst",
+        "minecraft:infested_stone",
+        "minecraft:infested_cobblestone",
+        "minecraft:infested_stone_bricks",
+        "minecraft:infested_mossy_stone_bricks",
+        "minecraft:infested_cracked_stone_bricks",
+        "minecraft:infested_chiseled_stone_bricks",
+        "minecraft:infested_deepslate",
+        "minecraft:infested_block",
         "minecraft:bubble_column",
+        "minecraft:sticky_piston_head",
+        "minecraft:piston_arm_collision",
+        "minecraft:moving_block",
+        "minecraft:structure_block",
         "minecraft:structure_void",
         "minecraft:barrier",
         "minecraft:light",
@@ -231,7 +333,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:command_block",
         "minecraft:repeating_command_block",
         "minecraft:chain_command_block",
-        "minecraft:structure_block",
         "minecraft:jigsaw",
         "minecraft:mob_spawner",
         "minecraft:spawner",
@@ -420,7 +521,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         )
         self._set_tooltip(
             self.include_unusual,
-            "Includes normally skipped blocks such as water, lava, bubble columns, barrier, light, portal blocks, command blocks, and other technical blocks.",
+            "Includes normally skipped blocks such as water, lava, bubble columns, budding amethyst, infested blocks, barrier, light, portal blocks, command blocks, and other technical blocks.",
         )
         self._set_tooltip(
             self.preserve_bedrock,
@@ -981,7 +1082,233 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return self._normalize_name(f"{namespace}:{str(base_name)}")
 
-    def _classify_block(self, block) -> Tuple[Optional[str], Optional[str]]:
+    def _tag_to_python_value(self, value):
+        """
+        Converts common Amulet NBT / property tag values into plain Python values.
+        """
+        for attr in ("py_data", "value"):
+            try:
+                return getattr(value, attr)
+            except Exception:
+                pass
+
+        try:
+            if hasattr(value, "__int__"):
+                return int(value)
+        except Exception:
+            pass
+
+        text = str(value)
+
+        if text.startswith('"') and text.endswith('"'):
+            return text[1:-1]
+
+        return text
+
+    def _get_block_property(self, block, names: Sequence[str]):
+        """
+        Reads a block property by trying several possible property names.
+        """
+        properties = getattr(block, "properties", None)
+
+        if not properties:
+            return None
+
+        for name in names:
+            try:
+                if name in properties:
+                    return self._tag_to_python_value(properties.get(name))
+            except Exception:
+                pass
+
+        return None
+
+    def _is_truthy_state_value(self, value) -> bool:
+        """
+        Interprets common Bedrock boolean / upper-half state values.
+        """
+        value = self._tag_to_python_value(value)
+
+        if isinstance(value, bool):
+            return value
+
+        if isinstance(value, int):
+            return value != 0
+
+        text = str(value).strip().lower()
+
+        return text in ("1", "true", "upper", "top", "head")
+
+    def _is_upper_half_block(self, block, key: str) -> bool:
+        """
+        Detects the upper / duplicate half of two-block-tall blocks.
+        """
+        if key not in self.DOUBLE_HEIGHT_DEDUP_BLOCKS:
+            return False
+
+        upper_value = self._get_block_property(
+            block,
+            (
+                "upper_block_bit",
+                "top_slot_bit",
+                "head_piece_bit",
+                "is_upper",
+                "upper",
+                "half",
+                "part",
+            ),
+        )
+
+        return self._is_truthy_state_value(upper_value)
+
+    def _get_nbt_child(self, nbt, key: str):
+        """
+        Reads a child tag from a block entity NBT object using compatible APIs.
+        """
+        if nbt is None:
+            return None
+
+        containers = [nbt]
+
+        try:
+            containers.append(nbt.value)
+        except Exception:
+            pass
+
+        try:
+            containers.append(nbt.tag)
+        except Exception:
+            pass
+
+        for container in containers:
+            if container is None:
+                continue
+
+            try:
+                if key in container:
+                    return container[key]
+            except Exception:
+                pass
+
+            try:
+                value = container.get(key)
+                if value is not None:
+                    return value
+            except Exception:
+                pass
+
+        return None
+
+    def _get_block_entity_nbt_value(self, block_entity, key: str):
+        """
+        Reads one value from a block entity NBT payload.
+        """
+        if block_entity is None:
+            return None
+
+        nbt = getattr(block_entity, "nbt", None)
+        value = self._get_nbt_child(nbt, key)
+
+        if value is None:
+            return None
+
+        return self._tag_to_python_value(value)
+
+    def _get_bed_color_name(self, block, block_entity) -> Optional[str]:
+        """
+        Reads a Bedrock bed color and converts it into a colored bed item name.
+        """
+        color = self._get_block_entity_nbt_value(block_entity, "color")
+
+        if color is None:
+            color = self._get_block_property(block, ("color", "bed_color"))
+
+        if color is None:
+            return None
+
+        if isinstance(color, int):
+            if 0 <= color < len(self.BED_COLOR_NAMES):
+                return self.BED_COLOR_NAMES[color]
+            return None
+
+        color_text = str(color).strip().lower()
+
+        if color_text.startswith("minecraft:"):
+            color_text = color_text.split(":", 1)[1]
+
+        color_text = color_text.replace(" ", "_")
+
+        if color_text.endswith("_bed"):
+            color_text = color_text[:-4]
+
+        if color_text in self.BED_COLOR_NAMES:
+            return color_text
+
+        return None
+
+    def _get_pitcher_crop_item_name(self, block) -> str:
+        """
+        Converts pitcher crop growth into the survival item result.
+
+        Fully grown pitcher crops become pitcher plants. Growing pitcher crops
+        become pitcher pods.
+        """
+        growth = self._get_block_property(block, ("growth", "age"))
+
+        try:
+            growth_value = int(growth)
+        except Exception:
+            growth_value = -1
+
+        if growth_value >= 4:
+            return "minecraft:pitcher_plant"
+
+        return "minecraft:pitcher_pod"
+
+    def _get_item_frame_item_name(self, block, key: str) -> str:
+        """
+        Converts placed item frame blocks into the correct frame item.
+
+        Bedrock can expose item frames as minecraft:frame, minecraft:glow_frame,
+        or as a universal item_frame_block with a glowing state. The exporter
+        stores them as the matching inventory item instead of skipping them.
+        """
+        if key == "minecraft:glow_frame":
+            return "minecraft:glow_frame"
+
+        if key == "minecraft:frame":
+            return "minecraft:frame"
+
+        glowing = self._get_block_property(block, ("glowing", "glow", "is_glowing"))
+
+        if self._is_truthy_state_value(glowing):
+            return "minecraft:glow_frame"
+
+        return "minecraft:frame"
+
+    def _get_item_nbt_name_damage(self, item_name: str) -> Tuple[str, int]:
+        """
+        Converts display item names into the Bedrock inventory name and damage value.
+        """
+        item_name = self.ITEM_NAME_OVERRIDES.get(str(item_name), str(item_name))
+
+        if item_name in self.BED_COLOR_BY_ITEM_NAME:
+            color_name = self.BED_COLOR_BY_ITEM_NAME[item_name]
+            return "minecraft:bed", self.BED_ITEM_DAMAGE_BY_COLOR.get(color_name, 0)
+
+        return item_name, 0
+
+    def _should_write_item_block_tag(self, item_name: str) -> bool:
+        """
+        Decides whether the item frame item should include a Block tag.
+
+        Some items are valid inventory items but should not be written as block
+        display data in Bedrock item frame NBT.
+        """
+        actual_name, _damage = self._get_item_nbt_name_damage(item_name)
+        return actual_name not in self.ITEM_FRAME_NO_BLOCK_TAG_ITEMS
+
+    def _classify_block(self, block, block_entity=None) -> Tuple[Optional[str], Optional[str]]:
         """
         Decides whether a block should be exported, skipped or treated as air.
         """
@@ -990,10 +1317,24 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         if key is None:
             return None, "unknown_block"
 
-        key = self.ITEM_NAME_OVERRIDES.get(key, key)
+        if key in ("minecraft:item_frame_block", "minecraft:frame", "minecraft:glow_frame"):
+            key = self._get_item_frame_item_name(block, key)
+        else:
+            key = self.ITEM_NAME_OVERRIDES.get(key, key)
 
         if key in self.AIR_BLOCKS or key.endswith(":air"):
             return None, None
+
+        if self._is_upper_half_block(block, key):
+            return None, None
+
+        if key == "minecraft:bed":
+            bed_color = self._get_bed_color_name(block, block_entity)
+            if bed_color:
+                key = f"minecraft:{bed_color}_bed"
+
+        if key == "minecraft:pitcher_crop":
+            key = self._get_pitcher_crop_item_name(block)
 
         if key == "minecraft:bedrock":
             return None, key
@@ -1148,11 +1489,16 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             if not str(item_name).strip():
                 continue
 
+            actual_name, damage_value = self._get_item_nbt_name_damage(item_name)
+
+            if not actual_name.strip():
+                continue
+
             item = TAG_Compound()
             item["Slot"] = TAG_Byte(int(slot))
-            item["Name"] = TAG_String(item_name)
+            item["Name"] = TAG_String(actual_name)
             item["Count"] = TAG_Byte(int(count))
-            item["Damage"] = TAG_Short(0)
+            item["Damage"] = TAG_Short(int(damage_value))
             items.append(item)
 
         return NBTFile(the_nbt)
@@ -1364,6 +1710,19 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         )
         return block
 
+    def _get_block_and_entity_safe_for_scan(self, x: int, y: int, z: int):
+        """
+        Reads a block and block entity through Amulet translation for state-sensitive blocks.
+        """
+        block, ent = self.world.get_version_block(
+            x,
+            y,
+            z,
+            self.canvas.dimension,
+            (self._world_platform, self._world_version),
+        )
+        return block, ent
+
     def _write_universal_block_to_chunk(
         self,
         chunk,
@@ -1474,15 +1833,26 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             block = self._get_block_for_scan(x, y, z, chunk_cache)
             export_key, skipped_key = self._classify_block(block)
 
-            if export_key in self.AMBIGUOUS_FAST_SCAN_BLOCKS:
+            ambiguous_lookup_needed = export_key in self.AMBIGUOUS_FAST_SCAN_BLOCKS
+            needs_safe_lookup = (
+                ambiguous_lookup_needed
+                or export_key in self.STATE_SENSITIVE_SCAN_BLOCKS
+                or skipped_key in self.STATE_SENSITIVE_SCAN_BLOCKS
+            )
+
+            if needs_safe_lookup:
                 try:
-                    safe_block = self._get_block_safe_for_scan(x, y, z)
-                    safe_export_key, safe_skipped_key = self._classify_block(safe_block)
+                    safe_block, safe_block_entity = self._get_block_and_entity_safe_for_scan(x, y, z)
+                    safe_export_key, safe_skipped_key = self._classify_block(safe_block, safe_block_entity)
 
                     if safe_export_key is not None or safe_skipped_key is not None:
                         export_key = safe_export_key
                         skipped_key = safe_skipped_key
-                        self._ambiguous_fast_scan_fallbacks += 1
+                        if ambiguous_lookup_needed:
+                            self._ambiguous_fast_scan_fallbacks += 1
+                    elif export_key in self.STATE_SENSITIVE_SCAN_BLOCKS or skipped_key in self.STATE_SENSITIVE_SCAN_BLOCKS:
+                        export_key = safe_export_key
+                        skipped_key = safe_skipped_key
                 except Exception:
                     pass
 
@@ -2157,23 +2527,30 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         if not str(item_name).strip():
             raise RuntimeError("Cannot create an item frame for an empty item name.")
 
+        actual_name, damage_value = self._get_item_nbt_name_damage(item_name)
+
+        if not actual_name.strip():
+            raise RuntimeError("Cannot create an item frame for an empty item name.")
+
         the_nbt = TAG_Compound()
         the_nbt["isMovable"] = TAG_Byte(1)
 
         item = TAG_Compound()
         item["Count"] = TAG_Byte(1)
-        item["Damage"] = TAG_Short(0)
-        item["Name"] = TAG_String(item_name)
+        item["Damage"] = TAG_Short(int(damage_value))
+        item["Name"] = TAG_String(actual_name)
         item["WasPickedUp"] = TAG_Byte(0)
 
-        block = TAG_Compound()
-        block["name"] = TAG_String(item_name)
-        block["states"] = TAG_Compound()
+        if self._should_write_item_block_tag(item_name):
+            block = TAG_Compound()
+            block["name"] = TAG_String(actual_name)
+            block["states"] = TAG_Compound()
 
-        if TAG_Int is not None:
-            block["version"] = TAG_Int(17841153)
+            if TAG_Int is not None:
+                block["version"] = TAG_Int(17841153)
 
-        item["Block"] = block
+            item["Block"] = block
+
         the_nbt["Item"] = item
 
         if TAG_Float is not None:
@@ -2249,7 +2626,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         skipped_frames = 0
 
         for item_name, storage_index in group_starts:
-            if not str(item_name).strip() or item_name in self.KNOWN_UNSAFE_ITEM_BLOCKS:
+            if not str(item_name).strip() or not self._is_safe_item_key(item_name):
                 skipped_frames += 1
                 continue
 
@@ -2284,7 +2661,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                     skipped_frames += 1
                     continue
 
-                if item_name in self.AMBIGUOUS_FAST_SCAN_BLOCKS:
+                if item_name in self.AMBIGUOUS_FAST_SCAN_BLOCKS and item_name not in ("minecraft:frame", "minecraft:glow_frame"):
                     skipped_frames += 1
                     continue
 
