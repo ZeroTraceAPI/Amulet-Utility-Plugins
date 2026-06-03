@@ -60,6 +60,6 @@ If you share, fork, modify, package, or redistribute these plugins, please link 
 
 ## Contributing
 
-Contributions, bug reports, feature requests, testing notes, and documentation improvements are welcome.
+Contributions are welcome. This includes bug reports, feature requests, new ideas, testing notes, documentation improvements, and code changes.
 
-Before contributing code, please read `CONTRIBUTING.md`.
+Before contributing, please read [`CONTRIBUTING.md`](CONTRIBUTING.md) so you understand the project rules, contribution terms, review process, and licensing expectations.
