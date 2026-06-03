@@ -63,3 +63,15 @@ If you share, fork, modify, package, or redistribute these plugins, please link 
 Contributions are welcome. This includes bug reports, feature requests, new ideas, testing notes, documentation improvements, and code changes.
 
 Before contributing, please read [`CONTRIBUTING.md`](CONTRIBUTING.md) so you understand the project rules, contribution terms, review process, and licensing expectations.
+
+## Contact
+
+For normal questions, bug reports, feature requests, and public discussion, please use GitHub Issues or GitHub Discussions when possible.
+
+If you do not want to create a GitHub account, you can contact the maintainer by email:
+
+`ZeroTraceAPI@proton.me`
+
+Please include the plugin name, plugin version, Amulet version, Minecraft Bedrock version, and a clear description of the issue or question when relevant.
+
+Email support is not guaranteed, but reasonable project-related messages are welcome.
