@@ -5,7 +5,8 @@ Purpose:
 - Count exportable non-air blocks.
 - Clear selected blocks while preserving protected blocks such as bedrock.
 - Place the collected blocks into chests, double chests, barrels or shulker boxes.
-- Optionally separate block groups, add spacing, and label groups with item frames.
+- Optionally separate block groups, add spacing, label groups with item frames,
+  and pack large exports into nested shulker boxes.
 
 Navigation:
 1. Imports and optional NBT compatibility
@@ -67,6 +68,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     # Minecraft inventory sizing used by the packer.
     SINGLE_CONTAINER_SLOT_COUNT = 27
     DOUBLE_CHEST_SLOT_COUNT = 54
+    SHULKER_BOX_SLOT_COUNT = 27
     ITEM_STACK_LIMIT = 64
     DEFAULT_STACK_HEIGHT = 8
     MAX_STACK_HEIGHT = 40
@@ -83,6 +85,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     CONTAINER_CHEST = "Chest"
     CONTAINER_BARREL = "Barrel"
     CONTAINER_SHULKER = "Shulker Box"
+
+    NESTED_SHULKER_MODE_PRACTICAL = "Balanced - large groups only"
+    NESTED_SHULKER_MODE_COMPACT = "Compact - all groups"
 
     SHULKER_COLORS = [
         "default",
@@ -162,6 +167,16 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:glow_frame",
         "minecraft:sticky_piston_head",
         "minecraft:pitcher_crop",
+    }
+
+    # These ambiguous scan names are still safe to use as item frame labels.
+    # Most ambiguous names are blocked from labels to prevent ghost items, but
+    # these names have been tested as valid item frame display items.
+    SAFE_AMBIGUOUS_ITEM_FRAME_BLOCKS = {
+        "minecraft:frame",
+        "minecraft:glow_frame",
+        "minecraft:web",
+        "minecraft:cobweb",
     }
 
     # State-sensitive blocks are re-read with the safer Amulet lookup so the
@@ -471,6 +486,33 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self.use_double_chests.SetValue(False)
         self.settings_sizer.Add(self.use_double_chests, 0, wx.ALL, 6)
 
+        self.use_nested_shulker_storage = wx.CheckBox(self.settings_panel, label="Pack into shulker boxes inside storage")
+        self.use_nested_shulker_storage.SetValue(False)
+        self.use_nested_shulker_storage.Bind(wx.EVT_CHECKBOX, self._on_nested_shulker_storage_changed)
+        self.settings_sizer.Add(self.use_nested_shulker_storage, 0, wx.ALL, 6)
+
+        self.nested_shulker_mode_row = wx.BoxSizer(wx.HORIZONTAL)
+        self.nested_shulker_mode_label = wx.StaticText(self.settings_panel, label="Nested shulker mode")
+        self.nested_shulker_mode_choice = wx.Choice(
+            self.settings_panel,
+            choices=[
+                self.NESTED_SHULKER_MODE_PRACTICAL,
+                self.NESTED_SHULKER_MODE_COMPACT,
+            ],
+        )
+        self.nested_shulker_mode_choice.SetSelection(0)
+        self.nested_shulker_mode_row.Add(self.nested_shulker_mode_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        self.nested_shulker_mode_row.Add(self.nested_shulker_mode_choice, 1)
+        self.settings_sizer.Add(self.nested_shulker_mode_row, 0, wx.ALL | wx.EXPAND, 6)
+
+        self.nested_shulker_color_row = wx.BoxSizer(wx.HORIZONTAL)
+        self.nested_shulker_color_label = wx.StaticText(self.settings_panel, label="Nested shulker color")
+        self.nested_shulker_color_choice = wx.Choice(self.settings_panel, choices=self.SHULKER_COLORS)
+        self.nested_shulker_color_choice.SetSelection(0)
+        self.nested_shulker_color_row.Add(self.nested_shulker_color_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        self.nested_shulker_color_row.Add(self.nested_shulker_color_choice, 1)
+        self.settings_sizer.Add(self.nested_shulker_color_row, 0, wx.ALL | wx.EXPAND, 6)
+
         self._sizer.Add(self.settings_panel, 0, wx.ALL | wx.EXPAND, 0)
 
         self.test = wx.Button(self, label="Delete Blocks to Storage")
@@ -564,6 +606,26 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             "Only applies when Storage container is set to Chest. Uses connected double chests with 54 slots instead of single chests with 27 slots.",
         )
         self._set_tooltip(
+            self.use_nested_shulker_storage,
+            "Advanced. Puts collected blocks into shulker boxes, then puts those shulker boxes inside the generated storage containers. This can greatly reduce how many containers are placed, but it uses more complex nested item data.",
+        )
+        self._set_tooltip(
+            self.nested_shulker_mode_label,
+            "Choose how nested shulker storage is used. Balanced mode leaves small block groups directly in storage and only uses shulker boxes for large groups. Compact mode uses shulker boxes for almost every group to save the most space.",
+        )
+        self._set_tooltip(
+            self.nested_shulker_mode_choice,
+            "Choose how nested shulker storage is used. Balanced mode leaves small block groups directly in storage and only uses shulker boxes for large groups. Compact mode uses shulker boxes for almost every group to save the most space.",
+        )
+        self._set_tooltip(
+            self.nested_shulker_color_label,
+            "Choose the color of the generated shulker boxes used inside storage containers. Default creates normal undyed shulker boxes.",
+        )
+        self._set_tooltip(
+            self.nested_shulker_color_choice,
+            "Choose the color of the generated shulker boxes used inside storage containers. Default creates normal undyed shulker boxes.",
+        )
+        self._set_tooltip(
             self.test,
             "Scans the selected area, counts exportable blocks, clears the selected blocks, and places the collected blocks into the chosen storage type.",
         )
@@ -648,6 +710,12 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         """
         self._update_option_visibility()
 
+    def _on_nested_shulker_storage_changed(self, _):
+        """
+        Refreshes option visibility when nested shulker storage is enabled or disabled.
+        """
+        self._update_option_visibility()
+
     def _on_panel_resized(self, event) -> None:
         """
         Updates the settings panel height when Amulet gives the operation panel more room.
@@ -692,11 +760,32 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         is_chest = container == self.CONTAINER_CHEST
         is_shulker = container == self.CONTAINER_SHULKER
         separate_groups_enabled = self.separate_types.GetValue()
+        nested_shulker_allowed = not is_shulker
+        nested_shulker_enabled = (
+            nested_shulker_allowed
+            and hasattr(self, "use_nested_shulker_storage")
+            and self.use_nested_shulker_storage.GetValue()
+        )
 
         self.use_double_chests.Show(is_chest)
         self.add_group_item_frames.Show(separate_groups_enabled)
         self.group_spacing_label.Show(separate_groups_enabled)
         self.group_spacing.Show(separate_groups_enabled)
+
+        if hasattr(self, "use_nested_shulker_storage"):
+            self.use_nested_shulker_storage.Show(nested_shulker_allowed)
+
+        if hasattr(self, "nested_shulker_mode_row"):
+            for child in self.nested_shulker_mode_row.GetChildren():
+                window = child.GetWindow()
+                if window is not None:
+                    window.Show(nested_shulker_enabled)
+
+        if hasattr(self, "nested_shulker_color_row"):
+            for child in self.nested_shulker_color_row.GetChildren():
+                window = child.GetWindow()
+                if window is not None:
+                    window.Show(nested_shulker_enabled)
 
         if not separate_groups_enabled:
             self.add_group_item_frames.SetValue(False)
@@ -708,6 +797,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         if not is_chest:
             self.use_double_chests.SetValue(False)
+
+        if is_shulker and hasattr(self, "use_nested_shulker_storage"):
+            self.use_nested_shulker_storage.SetValue(False)
 
         try:
             self.settings_panel.FitInside()
@@ -1485,7 +1577,11 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         if pair_lead is not None:
             the_nbt["pairlead"] = TAG_Byte(1 if pair_lead else 0)
 
-        for slot, (item_name, count) in enumerate(stacks):
+        for slot, stack in enumerate(stacks):
+            item_name = stack[0]
+            count = stack[1]
+            nested_items = stack[2] if len(stack) > 2 else None
+
             if not str(item_name).strip():
                 continue
 
@@ -1499,6 +1595,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             item["Name"] = TAG_String(actual_name)
             item["Count"] = TAG_Byte(int(count))
             item["Damage"] = TAG_Short(int(damage_value))
+
+            if nested_items:
+                item["tag"] = self._make_shulker_item_tag(nested_items)
+
             items.append(item)
 
         return NBTFile(the_nbt)
@@ -1535,6 +1635,138 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         if self._get_selected_container() == self.CONTAINER_CHEST and self.use_double_chests.GetValue():
             return self.DOUBLE_CHEST_SLOT_COUNT
         return self.SINGLE_CONTAINER_SLOT_COUNT
+
+    def _use_nested_shulker_storage(self) -> bool:
+        """
+        Returns whether collected items should be packed into shulker boxes inside storage.
+        """
+        if not hasattr(self, "use_nested_shulker_storage"):
+            return False
+
+        if self._get_selected_container() == self.CONTAINER_SHULKER:
+            return False
+
+        return bool(self.use_nested_shulker_storage.GetValue())
+
+    def _get_nested_shulker_item_name(self) -> str:
+        """
+        Returns the Bedrock item name for generated nested shulker boxes.
+        """
+        color = "default"
+
+        try:
+            color = self.nested_shulker_color_choice.GetStringSelection()
+        except Exception:
+            pass
+
+        if not color or color == "default":
+            return "minecraft:undyed_shulker_box"
+
+        return f"minecraft:{color}_shulker_box"
+
+    def _get_nested_shulker_mode(self) -> str:
+        """
+        Returns the selected nested shulker packing mode.
+        """
+        try:
+            mode = self.nested_shulker_mode_choice.GetStringSelection()
+        except Exception:
+            mode = ""
+
+        if not mode:
+            return self.NESTED_SHULKER_MODE_PRACTICAL
+
+        return mode
+
+    def _should_pack_stacks_into_nested_shulkers(self, item_name: str, stacks: Sequence[Tuple[str, int]]) -> bool:
+        """
+        Decides whether one block group should be nested into generated shulker boxes.
+        """
+        if self._is_shulker_item_name(item_name):
+            return False
+
+        if not stacks:
+            return False
+
+        mode = self._get_nested_shulker_mode()
+
+        if mode == self.NESTED_SHULKER_MODE_COMPACT:
+            return True
+
+        return len(stacks) > self.SHULKER_BOX_SLOT_COUNT
+
+    def _is_shulker_item_name(self, item_name: str) -> bool:
+        """
+        Checks whether an item name is a shulker box item.
+        """
+        item_name = self.ITEM_NAME_OVERRIDES.get(str(item_name), str(item_name))
+        return item_name == "minecraft:shulker_box" or item_name.endswith("_shulker_box")
+
+    def _make_shulker_item_tag(self, nested_items: Sequence[Tuple[str, int]]):
+        """
+        Builds the nested inventory tag for a shulker box item inside another container.
+        """
+        if TAG_Compound is None or TAG_List is None or TAG_Byte is None or TAG_String is None or TAG_Short is None:
+            raise RuntimeError("amulet_nbt tag helpers are unavailable in this environment.")
+
+        tag = TAG_Compound()
+        tag["Items"] = items = TAG_List()
+
+        for slot, nested_stack in enumerate(nested_items):
+            item_name = nested_stack[0]
+            count = nested_stack[1]
+
+            if not str(item_name).strip():
+                continue
+
+            actual_name, damage_value = self._get_item_nbt_name_damage(item_name)
+
+            if not actual_name.strip():
+                continue
+
+            item = TAG_Compound()
+            item["Slot"] = TAG_Byte(int(slot))
+            item["Name"] = TAG_String(actual_name)
+            item["Count"] = TAG_Byte(int(count))
+            item["Damage"] = TAG_Short(int(damage_value))
+            items.append(item)
+
+        return tag
+
+    def _pack_stacks_into_nested_shulker_items(
+        self,
+        stacks: Sequence[Tuple[str, int]],
+    ) -> List[Tuple[str, int, List[Tuple[str, int]]]]:
+        """
+        Packs normal item stacks into generated shulker box item entries.
+        """
+        shulker_items: List[Tuple[str, int, List[Tuple[str, int]]]] = []
+        current: List[Tuple[str, int]] = []
+        shulker_item_name = self._get_nested_shulker_item_name()
+
+        for stack in stacks:
+            current.append(stack)
+            if len(current) >= self.SHULKER_BOX_SLOT_COUNT:
+                shulker_items.append((shulker_item_name, 1, current))
+                current = []
+
+        if current:
+            shulker_items.append((shulker_item_name, 1, current))
+
+        return shulker_items
+
+    def _count_nested_shulker_items(self, inventories: Sequence[Sequence[Tuple]]) -> int:
+        """
+        Counts generated shulker box item entries inside physical storage containers.
+        """
+        total = 0
+
+        for inventory in inventories:
+            for stack in inventory:
+                if len(stack) > 2:
+                    total += 1
+
+        return total
 
     def _split_into_stacks(self, item_name: str, total_count: int) -> List[Tuple[str, int]]:
         """
@@ -1577,15 +1809,17 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return containers
 
-
     def _build_container_payloads_and_group_starts(
         self,
         counts: Dict[str, int],
-    ) -> Tuple[List[List[Tuple[str, int]]], List[Tuple[str, int]]]:
+    ) -> Tuple[List[List[Tuple]], List[Tuple[str, int]]]:
         """
         Builds storage inventories and remembers where each separated block group starts.
         """
-        payloads: List[List[Tuple[str, int]]] = []
+        if self._use_nested_shulker_storage():
+            return self._build_nested_shulker_payloads_and_group_starts(counts)
+
+        payloads: List[List[Tuple]] = []
         group_starts: List[Tuple[str, int]] = []
         slot_count = self._get_container_slot_count()
         item_names = self._get_ordered_item_names(counts)
@@ -1607,6 +1841,55 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             for item_name in item_names:
                 all_stacks.extend(self._split_into_stacks(item_name, counts[item_name]))
             payloads = self._pack_stacks_into_containers(all_stacks, slot_count)
+
+        return payloads, group_starts
+
+    def _build_nested_shulker_payloads_and_group_starts(
+        self,
+        counts: Dict[str, int],
+    ) -> Tuple[List[List[Tuple]], List[Tuple[str, int]]]:
+        """
+        Builds physical storage inventories containing generated shulker box items.
+
+        This advanced mode reduces placed storage blocks by putting collected
+        stacks inside shulker boxes, then placing those shulker boxes into the
+        chosen physical storage containers.
+        """
+        payloads: List[List[Tuple]] = []
+        group_starts: List[Tuple[str, int]] = []
+        slot_count = self._get_container_slot_count()
+        item_names = self._get_ordered_item_names(counts)
+
+        if self.separate_types.GetValue():
+            for item_name in item_names:
+                stacks = self._split_into_stacks(item_name, counts[item_name])
+                if not stacks:
+                    continue
+
+                if self._should_pack_stacks_into_nested_shulkers(item_name, stacks):
+                    main_entries = self._pack_stacks_into_nested_shulker_items(stacks)
+                else:
+                    main_entries = stacks
+
+                if not main_entries:
+                    continue
+
+                group_starts.append((item_name, len(payloads)))
+                payloads.extend(self._pack_stacks_into_containers(main_entries, slot_count))
+        else:
+            all_main_entries: List[Tuple] = []
+
+            for item_name in item_names:
+                stacks = self._split_into_stacks(item_name, counts[item_name])
+                if not stacks:
+                    continue
+
+                if self._should_pack_stacks_into_nested_shulkers(item_name, stacks):
+                    all_main_entries.extend(self._pack_stacks_into_nested_shulker_items(stacks))
+                else:
+                    all_main_entries.extend(stacks)
+
+            payloads = self._pack_stacks_into_containers(all_main_entries, slot_count)
 
         return payloads, group_starts
 
@@ -2080,7 +2363,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     def _choose_double_chest_axis(self, x_len: int, z_len: int) -> str:
         """
         Chooses the shortest usable horizontal axis for double-chest rows.
-        
+
         Double chests need two blocks along the row axis. If the shorter side is
         odd, the planner still uses it and leaves the extra single block unused
         rather than switching to the longer side.
@@ -2661,7 +2944,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                     skipped_frames += 1
                     continue
 
-                if item_name in self.AMBIGUOUS_FAST_SCAN_BLOCKS and item_name not in ("minecraft:frame", "minecraft:glow_frame"):
+                if item_name in self.AMBIGUOUS_FAST_SCAN_BLOCKS and item_name not in self.SAFE_AMBIGUOUS_ITEM_FRAME_BLOCKS:
                     skipped_frames += 1
                     continue
 
@@ -2750,6 +3033,12 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             use_double_chests = container == self.CONTAINER_CHEST and self.use_double_chests.GetValue()
 
             self._log(f"Storage container: {container}")
+            self._log(f"Nested shulker storage: {self._use_nested_shulker_storage()}")
+            if self._use_nested_shulker_storage():
+                self._log(f"Nested shulker mode: {self._get_nested_shulker_mode()}")
+                if self._get_nested_shulker_mode() == self.NESTED_SHULKER_MODE_PRACTICAL:
+                    self._log("Nested shulker threshold: more than 27 stacks per block group")
+                self._log(f"Nested shulker color: {self.nested_shulker_color_choice.GetStringSelection()}")
 
             if container == self.CONTAINER_SHULKER:
                 self._log(f"Shulker color: {self.shulker_color_choice.GetStringSelection()}")
@@ -2802,6 +3091,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
             inventories, group_starts = self._build_container_payloads_and_group_starts(counts)
             container_count = len(inventories)
+            nested_shulker_count = self._count_nested_shulker_items(inventories)
 
             if use_double_chests:
                 if self.separate_types.GetValue():
@@ -2838,6 +3128,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             else:
                 self._log(f"Storage containers needed: {container_count:,}")
                 self._log(f"Physical storage blocks planned: {planned_physical_blocks:,}")
+
+            if self._use_nested_shulker_storage():
+                self._log(f"Nested shulker boxes created: {nested_shulker_count:,}")
 
             self._log(f"Vertical stack height: {self.stack_height.GetValue()}")
             self._log(f"ABC item order: {self.alphabetical_order.GetValue()}")
@@ -2901,6 +3194,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
             self._log(f"Placed storage units: {container_count:,}")
             self._log(f"Placed physical storage blocks: {planned_physical_blocks:,}")
+            if self._use_nested_shulker_storage():
+                self._log(f"Placed nested shulker boxes: {nested_shulker_count:,}")
             self._log(f"Placed item frames: {placed_item_frames:,}")
             self._log(f"Skipped item frames: {skipped_item_frames:,}")
             self._log(f"Place time: {self._format_seconds(place_time)}")
