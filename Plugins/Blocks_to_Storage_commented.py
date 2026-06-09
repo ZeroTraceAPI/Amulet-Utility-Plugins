@@ -22,6 +22,7 @@ Navigation:
 11. Main Amulet operation wrapper"""
 
 import collections
+import re
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple, Set
@@ -167,6 +168,76 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:glow_frame",
         "minecraft:sticky_piston_head",
         "minecraft:pitcher_crop",
+        "minecraft:wall",
+        "minecraft:door",
+        "minecraft:glazed_terracotta",
+        "minecraft:banner",
+        "minecraft:standing_banner",
+        "minecraft:wall_banner",
+        "minecraft:sign",
+        "minecraft:standing_sign",
+        "minecraft:wall_sign",
+        "minecraft:hanging_sign",
+        "minecraft:wall_hanging_sign",
+        "minecraft:oak_standing_sign",
+        "minecraft:spruce_standing_sign",
+        "minecraft:birch_standing_sign",
+        "minecraft:jungle_standing_sign",
+        "minecraft:acacia_standing_sign",
+        "minecraft:dark_oak_standing_sign",
+        "minecraft:mangrove_standing_sign",
+        "minecraft:cherry_standing_sign",
+        "minecraft:bamboo_standing_sign",
+        "minecraft:crimson_standing_sign",
+        "minecraft:warped_standing_sign",
+        "minecraft:oak_hanging_sign",
+        "minecraft:spruce_hanging_sign",
+        "minecraft:birch_hanging_sign",
+        "minecraft:jungle_hanging_sign",
+        "minecraft:acacia_hanging_sign",
+        "minecraft:dark_oak_hanging_sign",
+        "minecraft:mangrove_hanging_sign",
+        "minecraft:cherry_hanging_sign",
+        "minecraft:bamboo_hanging_sign",
+        "minecraft:crimson_hanging_sign",
+        "minecraft:warped_hanging_sign",
+        "minecraft:candle_cake",
+        "minecraft:white_candle_cake",
+        "minecraft:orange_candle_cake",
+        "minecraft:magenta_candle_cake",
+        "minecraft:light_blue_candle_cake",
+        "minecraft:yellow_candle_cake",
+        "minecraft:lime_candle_cake",
+        "minecraft:pink_candle_cake",
+        "minecraft:gray_candle_cake",
+        "minecraft:light_gray_candle_cake",
+        "minecraft:cyan_candle_cake",
+        "minecraft:purple_candle_cake",
+        "minecraft:blue_candle_cake",
+        "minecraft:brown_candle_cake",
+        "minecraft:green_candle_cake",
+        "minecraft:red_candle_cake",
+        "minecraft:black_candle_cake",
+        "minecraft:candle",
+        "minecraft:white_candle",
+        "minecraft:orange_candle",
+        "minecraft:magenta_candle",
+        "minecraft:light_blue_candle",
+        "minecraft:yellow_candle",
+        "minecraft:lime_candle",
+        "minecraft:pink_candle",
+        "minecraft:gray_candle",
+        "minecraft:light_gray_candle",
+        "minecraft:cyan_candle",
+        "minecraft:purple_candle",
+        "minecraft:blue_candle",
+        "minecraft:brown_candle",
+        "minecraft:green_candle",
+        "minecraft:red_candle",
+        "minecraft:black_candle",
+        "minecraft:bars",
+        "minecraft:stonecutter_old",
+        "minecraft:stonecutter_block",
     }
 
     # These ambiguous scan names are still safe to use as item frame labels.
@@ -177,6 +248,51 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:glow_frame",
         "minecraft:web",
         "minecraft:cobweb",
+        "minecraft:candle_cake",
+        "minecraft:white_candle_cake",
+        "minecraft:orange_candle_cake",
+        "minecraft:magenta_candle_cake",
+        "minecraft:light_blue_candle_cake",
+        "minecraft:yellow_candle_cake",
+        "minecraft:lime_candle_cake",
+        "minecraft:pink_candle_cake",
+        "minecraft:gray_candle_cake",
+        "minecraft:light_gray_candle_cake",
+        "minecraft:cyan_candle_cake",
+        "minecraft:purple_candle_cake",
+        "minecraft:blue_candle_cake",
+        "minecraft:brown_candle_cake",
+        "minecraft:green_candle_cake",
+        "minecraft:red_candle_cake",
+        "minecraft:black_candle_cake",
+        "minecraft:candle",
+        "minecraft:white_candle",
+        "minecraft:orange_candle",
+        "minecraft:magenta_candle",
+        "minecraft:light_blue_candle",
+        "minecraft:yellow_candle",
+        "minecraft:lime_candle",
+        "minecraft:pink_candle",
+        "minecraft:gray_candle",
+        "minecraft:light_gray_candle",
+        "minecraft:cyan_candle",
+        "minecraft:purple_candle",
+        "minecraft:blue_candle",
+        "minecraft:brown_candle",
+        "minecraft:green_candle",
+        "minecraft:red_candle",
+        "minecraft:black_candle",
+        "minecraft:oak_hanging_sign",
+        "minecraft:spruce_hanging_sign",
+        "minecraft:birch_hanging_sign",
+        "minecraft:jungle_hanging_sign",
+        "minecraft:acacia_hanging_sign",
+        "minecraft:dark_oak_hanging_sign",
+        "minecraft:mangrove_hanging_sign",
+        "minecraft:cherry_hanging_sign",
+        "minecraft:bamboo_hanging_sign",
+        "minecraft:crimson_hanging_sign",
+        "minecraft:warped_hanging_sign",
     }
 
     # State-sensitive blocks are re-read with the safer Amulet lookup so the
@@ -197,11 +313,80 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:pitcher_plant",
         "minecraft:pitcher_crop",
         "minecraft:double_plant",
+        "minecraft:wall",
+        "minecraft:door",
+        "minecraft:banner",
+        "minecraft:standing_banner",
+        "minecraft:wall_banner",
+        "minecraft:sign",
+        "minecraft:standing_sign",
+        "minecraft:wall_sign",
+        "minecraft:hanging_sign",
+        "minecraft:wall_hanging_sign",
+        "minecraft:oak_standing_sign",
+        "minecraft:spruce_standing_sign",
+        "minecraft:birch_standing_sign",
+        "minecraft:jungle_standing_sign",
+        "minecraft:acacia_standing_sign",
+        "minecraft:dark_oak_standing_sign",
+        "minecraft:mangrove_standing_sign",
+        "minecraft:cherry_standing_sign",
+        "minecraft:bamboo_standing_sign",
+        "minecraft:crimson_standing_sign",
+        "minecraft:warped_standing_sign",
+        "minecraft:oak_hanging_sign",
+        "minecraft:spruce_hanging_sign",
+        "minecraft:birch_hanging_sign",
+        "minecraft:jungle_hanging_sign",
+        "minecraft:acacia_hanging_sign",
+        "minecraft:dark_oak_hanging_sign",
+        "minecraft:mangrove_hanging_sign",
+        "minecraft:cherry_hanging_sign",
+        "minecraft:bamboo_hanging_sign",
+        "minecraft:crimson_hanging_sign",
+        "minecraft:warped_hanging_sign",
+        "minecraft:candle_cake",
+        "minecraft:white_candle_cake",
+        "minecraft:orange_candle_cake",
+        "minecraft:magenta_candle_cake",
+        "minecraft:light_blue_candle_cake",
+        "minecraft:yellow_candle_cake",
+        "minecraft:lime_candle_cake",
+        "minecraft:pink_candle_cake",
+        "minecraft:gray_candle_cake",
+        "minecraft:light_gray_candle_cake",
+        "minecraft:cyan_candle_cake",
+        "minecraft:purple_candle_cake",
+        "minecraft:blue_candle_cake",
+        "minecraft:brown_candle_cake",
+        "minecraft:green_candle_cake",
+        "minecraft:red_candle_cake",
+        "minecraft:black_candle_cake",
+        "minecraft:candle",
+        "minecraft:white_candle",
+        "minecraft:orange_candle",
+        "minecraft:magenta_candle",
+        "minecraft:light_blue_candle",
+        "minecraft:yellow_candle",
+        "minecraft:lime_candle",
+        "minecraft:pink_candle",
+        "minecraft:gray_candle",
+        "minecraft:light_gray_candle",
+        "minecraft:cyan_candle",
+        "minecraft:purple_candle",
+        "minecraft:blue_candle",
+        "minecraft:brown_candle",
+        "minecraft:green_candle",
+        "minecraft:red_candle",
+        "minecraft:black_candle",
+        "minecraft:bars",
+        "minecraft:glazed_terracotta",
     }
 
     # Generic fallback names that should not be written directly as items.
     # If a safer Amulet lookup still returns one of these names, the block is
-    # skipped instead of risking empty / ghost storage entries.
+    # skipped instead of risking empty / ghost storage entries. Some entries
+    # may become mapped later once their exact Bedrock item NBT is confirmed.
     GENERIC_UNSAFE_ITEM_BLOCKS = {
         "minecraft:slab",
         "minecraft:double_slab",
@@ -227,6 +412,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:double_stone_slab3",
         "minecraft:double_stone_slab4",
         "minecraft:infested_block",
+        "minecraft:stained_terracotta",
+        "minecraft:wall",
+        "minecraft:door",
+        "minecraft:glazed_terracotta",
     }
 
     # Some Bedrock block names need to be corrected before they are written
@@ -236,6 +425,105 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:fire_fly_bush": "minecraft:firefly_bush",
         "minecraft:small_dripleaf": "minecraft:small_dripleaf_block",
         "minecraft:item_frame_block": "minecraft:frame",
+        "minecraft:stonecutter_block": "minecraft:stonecutter",
+        "minecraft:stonecutter_old": "minecraft:stonecutter",
+        "minecraft:chain": "minecraft:iron_chain",
+        "minecraft:oak_door": "minecraft:wooden_door",
+        "minecraft:nether_bricks": "minecraft:nether_brick",
+        "minecraft:red_nether_bricks": "minecraft:red_nether_brick",
+        "minecraft:terracotta": "minecraft:hardened_clay",
+        "minecraft:melon": "minecraft:melon_block",
+        "minecraft:redstone_wire": "minecraft:redstone",
+        "minecraft:cocoa": "minecraft:cocoa_beans",
+        "minecraft:farmland": "minecraft:dirt",
+        "minecraft:pumpkin_stem": "minecraft:pumpkin_seeds",
+        "minecraft:attached_pumpkin_stem": "minecraft:pumpkin_seeds",
+        "minecraft:melon_stem": "minecraft:melon_seeds",
+        "minecraft:attached_melon_stem": "minecraft:melon_seeds",
+        "minecraft:kelp_plant": "minecraft:kelp",
+        "minecraft:waxed_copper_block": "minecraft:waxed_copper",
+        "minecraft:light_gray_glazed_terracotta": "minecraft:silver_glazed_terracotta",
+        "minecraft:wall_sign": "minecraft:sign",
+        "minecraft:carrots": "minecraft:carrot",
+        "minecraft:potatoes": "minecraft:potato",
+        "minecraft:beetroots": "minecraft:beetroot",
+        "minecraft:oak_wall_sign": "minecraft:oak_sign",
+        "minecraft:oak_wall_hanging_sign": "minecraft:oak_hanging_sign",
+        "minecraft:spruce_wall_hanging_sign": "minecraft:spruce_hanging_sign",
+        "minecraft:birch_wall_hanging_sign": "minecraft:birch_hanging_sign",
+        "minecraft:jungle_wall_hanging_sign": "minecraft:jungle_hanging_sign",
+        "minecraft:acacia_wall_hanging_sign": "minecraft:acacia_hanging_sign",
+        "minecraft:dark_oak_wall_hanging_sign": "minecraft:dark_oak_hanging_sign",
+        "minecraft:mangrove_wall_hanging_sign": "minecraft:mangrove_hanging_sign",
+        "minecraft:cherry_wall_hanging_sign": "minecraft:cherry_hanging_sign",
+        "minecraft:bamboo_wall_hanging_sign": "minecraft:bamboo_hanging_sign",
+        "minecraft:crimson_wall_hanging_sign": "minecraft:crimson_hanging_sign",
+        "minecraft:warped_wall_hanging_sign": "minecraft:warped_hanging_sign",
+        "minecraft:spruce_wall_sign": "minecraft:spruce_sign",
+        "minecraft:birch_wall_sign": "minecraft:birch_sign",
+        "minecraft:jungle_wall_sign": "minecraft:jungle_sign",
+        "minecraft:acacia_wall_sign": "minecraft:acacia_sign",
+        "minecraft:dark_oak_wall_sign": "minecraft:dark_oak_sign",
+        "minecraft:mangrove_wall_sign": "minecraft:mangrove_sign",
+        "minecraft:cherry_wall_sign": "minecraft:cherry_sign",
+        "minecraft:bamboo_wall_sign": "minecraft:bamboo_sign",
+        "minecraft:crimson_wall_sign": "minecraft:crimson_sign",
+        "minecraft:warped_wall_sign": "minecraft:warped_sign",
+        "minecraft:standing_sign": "minecraft:sign",
+        "minecraft:oak_standing_sign": "minecraft:oak_sign",
+        "minecraft:spruce_standing_sign": "minecraft:spruce_sign",
+        "minecraft:birch_standing_sign": "minecraft:birch_sign",
+        "minecraft:jungle_standing_sign": "minecraft:jungle_sign",
+        "minecraft:acacia_standing_sign": "minecraft:acacia_sign",
+        "minecraft:dark_oak_standing_sign": "minecraft:dark_oak_sign",
+        "minecraft:mangrove_standing_sign": "minecraft:mangrove_sign",
+        "minecraft:cherry_standing_sign": "minecraft:cherry_sign",
+        "minecraft:bamboo_standing_sign": "minecraft:bamboo_sign",
+        "minecraft:crimson_standing_sign": "minecraft:crimson_sign",
+        "minecraft:warped_standing_sign": "minecraft:warped_sign",
+    }
+
+    # Candle cakes are placed blocks, not normal inventory items. When unusual
+    # blocks are disabled, export them as the survival-friendly items users can
+    # actually handle: one cake plus the matching candle.
+    CANDLE_CAKE_CANDLE_BY_BLOCK = {
+        "minecraft:candle_cake": "minecraft:candle",
+        "minecraft:white_candle_cake": "minecraft:white_candle",
+        "minecraft:orange_candle_cake": "minecraft:orange_candle",
+        "minecraft:magenta_candle_cake": "minecraft:magenta_candle",
+        "minecraft:light_blue_candle_cake": "minecraft:light_blue_candle",
+        "minecraft:yellow_candle_cake": "minecraft:yellow_candle",
+        "minecraft:lime_candle_cake": "minecraft:lime_candle",
+        "minecraft:pink_candle_cake": "minecraft:pink_candle",
+        "minecraft:gray_candle_cake": "minecraft:gray_candle",
+        "minecraft:light_gray_candle_cake": "minecraft:light_gray_candle",
+        "minecraft:cyan_candle_cake": "minecraft:cyan_candle",
+        "minecraft:purple_candle_cake": "minecraft:purple_candle",
+        "minecraft:blue_candle_cake": "minecraft:blue_candle",
+        "minecraft:brown_candle_cake": "minecraft:brown_candle",
+        "minecraft:green_candle_cake": "minecraft:green_candle",
+        "minecraft:red_candle_cake": "minecraft:red_candle",
+        "minecraft:black_candle_cake": "minecraft:black_candle",
+    }
+
+    CANDLE_ITEM_BLOCKS = {
+        "minecraft:candle",
+        "minecraft:white_candle",
+        "minecraft:orange_candle",
+        "minecraft:magenta_candle",
+        "minecraft:light_blue_candle",
+        "minecraft:yellow_candle",
+        "minecraft:lime_candle",
+        "minecraft:pink_candle",
+        "minecraft:gray_candle",
+        "minecraft:light_gray_candle",
+        "minecraft:cyan_candle",
+        "minecraft:purple_candle",
+        "minecraft:blue_candle",
+        "minecraft:brown_candle",
+        "minecraft:green_candle",
+        "minecraft:red_candle",
+        "minecraft:black_candle",
     }
 
     BED_COLOR_NAMES = [
@@ -265,13 +553,160 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         f"minecraft:{color_name}_bed": color_name for color_name in BED_COLOR_NAMES
     }
 
+    TERRACOTTA_ITEM_BY_COLOR = {
+        color_name: f"minecraft:{color_name}_terracotta" for color_name in BED_COLOR_NAMES
+    }
+
+    GLAZED_TERRACOTTA_ITEM_BY_COLOR = {
+        color_name: f"minecraft:{color_name}_glazed_terracotta" for color_name in BED_COLOR_NAMES
+    }
+
+    WALL_ITEM_BY_TYPE = {
+        "cobblestone": "minecraft:cobblestone_wall",
+        "mossy_cobblestone": "minecraft:mossy_cobblestone_wall",
+        "granite": "minecraft:granite_wall",
+        "diorite": "minecraft:diorite_wall",
+        "andesite": "minecraft:andesite_wall",
+        "sandstone": "minecraft:sandstone_wall",
+        "brick": "minecraft:brick_wall",
+        "stone_brick": "minecraft:stone_brick_wall",
+        "mossy_stone_brick": "minecraft:mossy_stone_brick_wall",
+        "nether_brick": "minecraft:nether_brick_wall",
+        "end_brick": "minecraft:end_stone_brick_wall",
+        "prismarine": "minecraft:prismarine_wall",
+        "red_sandstone": "minecraft:red_sandstone_wall",
+        "red_nether_brick": "minecraft:red_nether_brick_wall",
+    }
+
+    DOOR_ITEM_BY_TYPE = {
+        "wood": "minecraft:oak_door",
+        "oak": "minecraft:oak_door",
+        "spruce": "minecraft:spruce_door",
+        "birch": "minecraft:birch_door",
+        "jungle": "minecraft:jungle_door",
+        "acacia": "minecraft:acacia_door",
+        "dark_oak": "minecraft:dark_oak_door",
+        "mangrove": "minecraft:mangrove_door",
+        "cherry": "minecraft:cherry_door",
+        "bamboo": "minecraft:bamboo_door",
+        "crimson": "minecraft:crimson_door",
+        "warped": "minecraft:warped_door",
+        "iron": "minecraft:iron_door",
+    }
+
+    SIGN_ITEM_BY_TYPE = {
+        "wood": "minecraft:oak_sign",
+        "oak": "minecraft:oak_sign",
+        "spruce": "minecraft:spruce_sign",
+        "birch": "minecraft:birch_sign",
+        "jungle": "minecraft:jungle_sign",
+        "acacia": "minecraft:acacia_sign",
+        "dark_oak": "minecraft:dark_oak_sign",
+        "mangrove": "minecraft:mangrove_sign",
+        "cherry": "minecraft:cherry_sign",
+        "bamboo": "minecraft:bamboo_sign",
+        "crimson": "minecraft:crimson_sign",
+        "warped": "minecraft:warped_sign",
+    }
+
+    HANGING_SIGN_ITEM_BY_TYPE = {
+        "wood": "minecraft:oak_hanging_sign",
+        "oak": "minecraft:oak_hanging_sign",
+        "spruce": "minecraft:spruce_hanging_sign",
+        "birch": "minecraft:birch_hanging_sign",
+        "jungle": "minecraft:jungle_hanging_sign",
+        "acacia": "minecraft:acacia_hanging_sign",
+        "dark_oak": "minecraft:dark_oak_hanging_sign",
+        "mangrove": "minecraft:mangrove_hanging_sign",
+        "cherry": "minecraft:cherry_hanging_sign",
+        "bamboo": "minecraft:bamboo_hanging_sign",
+        "crimson": "minecraft:crimson_hanging_sign",
+        "warped": "minecraft:warped_hanging_sign",
+    }
+
+    BARS_ITEM_BY_TYPE = {
+        "iron": "minecraft:iron_bars",
+        "copper": "minecraft:copper_bars",
+        "exposed_copper": "minecraft:exposed_copper_bars",
+        "weathered_copper": "minecraft:weathered_copper_bars",
+        "oxidized_copper": "minecraft:oxidized_copper_bars",
+        "waxed_copper": "minecraft:waxed_copper_bars",
+        "waxed_exposed_copper": "minecraft:waxed_exposed_copper_bars",
+        "waxed_weathered_copper": "minecraft:waxed_weathered_copper_bars",
+        "waxed_oxidized_copper": "minecraft:waxed_oxidized_copper_bars",
+    }
+
+    COLOR_NAME_ALIASES = {
+        "silver": "light_gray",
+        "lightgrey": "light_gray",
+        "light_grey": "light_gray",
+        "grey": "gray",
+    }
+
+    BANNER_ITEM_PREFIX = "minecraft:banner_damage_"
+
     # Some inventory items use one Bedrock item name plus a damage value instead
     # of one unique item ID per color or state.
     ITEM_FRAME_NO_BLOCK_TAG_ITEMS = {
         "minecraft:bed",
         "minecraft:pitcher_pod",
+        "minecraft:pumpkin_seeds",
+        "minecraft:melon_seeds",
+        "minecraft:melon_slice",
+        "minecraft:redstone",
+        "minecraft:carrot",
+        "minecraft:potato",
+        "minecraft:beetroot",
+        "minecraft:cocoa_beans",
+        "minecraft:banner",
+        "minecraft:sign",
+        "minecraft:oak_sign",
+        "minecraft:spruce_sign",
+        "minecraft:birch_sign",
+        "minecraft:jungle_sign",
+        "minecraft:acacia_sign",
+        "minecraft:dark_oak_sign",
+        "minecraft:mangrove_sign",
+        "minecraft:cherry_sign",
+        "minecraft:bamboo_sign",
+        "minecraft:crimson_sign",
+        "minecraft:warped_sign",
+        "minecraft:oak_hanging_sign",
+        "minecraft:spruce_hanging_sign",
+        "minecraft:birch_hanging_sign",
+        "minecraft:jungle_hanging_sign",
+        "minecraft:acacia_hanging_sign",
+        "minecraft:dark_oak_hanging_sign",
+        "minecraft:mangrove_hanging_sign",
+        "minecraft:cherry_hanging_sign",
+        "minecraft:bamboo_hanging_sign",
+        "minecraft:crimson_hanging_sign",
+        "minecraft:warped_hanging_sign",
+        "minecraft:candle",
+        "minecraft:white_candle",
+        "minecraft:orange_candle",
+        "minecraft:magenta_candle",
+        "minecraft:light_blue_candle",
+        "minecraft:yellow_candle",
+        "minecraft:lime_candle",
+        "minecraft:pink_candle",
+        "minecraft:gray_candle",
+        "minecraft:light_gray_candle",
+        "minecraft:cyan_candle",
+        "minecraft:purple_candle",
+        "minecraft:blue_candle",
+        "minecraft:brown_candle",
+        "minecraft:green_candle",
+        "minecraft:red_candle",
+        "minecraft:black_candle",
         "minecraft:frame",
         "minecraft:glow_frame",
+    }
+
+    NON_STACKABLE_ITEMS = {
+        "minecraft:bed",
+        "minecraft:shulker_box",
+        "minecraft:undyed_shulker_box",
     }
 
     # These blocks have two physical block positions but should normally only
@@ -731,7 +1166,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         Gives the settings area more vertical room while keeping the export log usable.
         """
         try:
-            width, height = self.GetClientSize()
+            _width, height = self.GetClientSize()
         except Exception:
             return
 
@@ -1029,6 +1464,36 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     # ---------------------------------------------------------------------
     # Direction helpers
     # ---------------------------------------------------------------------
+    def _get_single_storage_row_facing(
+        self,
+        x: int,
+        z: int,
+        bounds: Tuple[int, int, int, int, int, int],
+    ) -> str:
+        """
+        Chooses an inward-facing direction that is consistent across a storage row.
+
+        Storage rows are planned along the shorter horizontal side of the selection.
+        Facing is based only on the row's secondary axis position, not the chest's
+        position along the row. This keeps end containers from turning sideways
+        while still pointing the row back toward the inside of the selection.
+        """
+        min_x, _min_y, min_z, max_x, _max_y, max_z = bounds
+
+        x_len = (max_x - min_x) + 1
+        z_len = (max_z - min_z) + 1
+        center_x = (min_x + max_x) / 2.0
+        center_z = (min_z + max_z) / 2.0
+
+        if x_len <= z_len:
+            if z <= center_z:
+                return "south"
+            return "north"
+
+        if x <= center_x:
+            return "east"
+        return "west"
+
     def _get_inward_facing(
         self,
         x: int,
@@ -1036,24 +1501,13 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         bounds: Tuple[int, int, int, int, int, int],
     ) -> str:
         """
-        Chooses a single-container facing direction that points toward the inside of the selection.
+        Chooses the single-container facing direction.
+
+        Kept as a compatibility wrapper for older call sites. Facing is now
+        row-consistent and inward-facing instead of recalculating from both axes
+        for every individual chest.
         """
-        min_x, min_y, min_z, max_x, max_y, max_z = bounds
-
-        center_x = (min_x + max_x) / 2.0
-        center_z = (min_z + max_z) / 2.0
-
-        dx = center_x - x
-        dz = center_z - z
-
-        if abs(dx) >= abs(dz):
-            if dx >= 0:
-                return "east"
-            return "west"
-
-        if dz >= 0:
-            return "south"
-        return "north"
+        return self._get_single_storage_row_facing(x, z, bounds)
 
     def _get_double_chest_facing(
         self,
@@ -1065,24 +1519,87 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         bounds: Tuple[int, int, int, int, int, int],
     ) -> str:
         """
-        Chooses a double-chest facing direction based on the pair position and selection center.
+        Chooses an inward-facing direction that is consistent across a double-chest row.
         """
-        min_x, min_y, min_z, max_x, max_y, max_z = bounds
-
+        min_x, _min_y, min_z, max_x, _max_y, max_z = bounds
         center_x = (min_x + max_x) / 2.0
         center_z = (min_z + max_z) / 2.0
-
         pair_center_x = (x1 + x2) / 2.0
         pair_center_z = (z1 + z2) / 2.0
 
         if pair_axis == "x":
-            if center_z >= pair_center_z:
+            if pair_center_z <= center_z:
                 return "south"
             return "north"
 
-        if center_x >= pair_center_x:
+        if pair_center_x <= center_x:
             return "east"
         return "west"
+
+    def _get_primary_offset_for_visual_index(
+        self,
+        primary_axis: str,
+        visual_index: int,
+        line_index: int,
+        primary_len: int,
+        bounds: Tuple[int, int, int, int, int, int],
+    ) -> int:
+        """
+        Converts a visual left-to-right row index into the actual primary-axis offset.
+
+        The row still faces inward. This helper only decides whether the row
+        should be filled from low-to-high or high-to-low coordinates so ABC
+        order starts from the visual left side for both X rows and Z rows.
+        """
+        min_x, _min_y, min_z, _max_x, _max_y, _max_z = bounds
+
+        if primary_axis == "x":
+            x = min_x
+            z = min_z + line_index
+            facing = self._get_single_storage_row_facing(x, z, bounds)
+            if facing == "north":
+                return (primary_len - 1) - visual_index
+            return visual_index
+
+        x = min_x + line_index
+        z = min_z
+        facing = self._get_single_storage_row_facing(x, z, bounds)
+        if facing == "east":
+            return (primary_len - 1) - visual_index
+        return visual_index
+
+    def _get_double_chest_primary_offset_for_visual_index(
+        self,
+        pair_axis: str,
+        visual_index: int,
+        line_index: int,
+        primary_block_len: int,
+        bounds: Tuple[int, int, int, int, int, int],
+    ) -> int:
+        """
+        Converts a visual left-to-right row index into a double-chest pair start offset.
+        """
+        min_x, _min_y, min_z, _max_x, _max_y, _max_z = bounds
+
+        if pair_axis == "x":
+            x1 = min_x
+            x2 = min_x + 1
+            z1 = min_z + line_index
+            z2 = z1
+            facing = self._get_double_chest_facing(pair_axis, x1, z1, x2, z2, bounds)
+            if facing == "north":
+                return (primary_block_len - 2) - visual_index
+            return visual_index
+
+        x1 = min_x + line_index
+        x2 = x1
+        z1 = min_z
+        z2 = min_z + 1
+        facing = self._get_double_chest_facing(pair_axis, x1, z1, x2, z2, bounds)
+        if facing == "east":
+            return (primary_block_len - 2) - visual_index
+        return visual_index
+
 
     def _get_double_chest_connections(
         self,
@@ -1090,7 +1607,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         facing: str,
     ) -> Tuple[str, str]:
         """
-        Returns left/right connection states so paired chests connect correctly.
+        Returns left to right connection states so paired chests connect correctly.
         """
         if pair_axis == "x":
             if facing == "north":
@@ -1123,8 +1640,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         """
         connection_1, connection_2 = self._get_double_chest_connections(pair_axis, facing)
 
-        x1, y1, z1 = first_pos
-        x2, y2, z2 = second_pos
+        x1, _y1, z1 = first_pos
+        x2, _y2, z2 = second_pos
 
         first_is_visual_left = True
 
@@ -1228,14 +1745,24 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             return value != 0
 
         text = str(value).strip().lower()
+        text = text.strip('"').strip("'")
 
-        return text in ("1", "true", "upper", "top", "head")
+        if text in ("1", "1b", "true", "upper", "top", "head"):
+            return True
+
+        if "true" in text:
+            return True
+
+        if re.search(r"\b1\b", text):
+            return True
+
+        return False
 
     def _is_upper_half_block(self, block, key: str) -> bool:
         """
         Detects the upper / duplicate half of two-block-tall blocks.
         """
-        if key not in self.DOUBLE_HEIGHT_DEDUP_BLOCKS:
+        if key not in self.DOUBLE_HEIGHT_DEDUP_BLOCKS and key != "minecraft:door" and not str(key).endswith("_door"):
             return False
 
         upper_value = self._get_block_property(
@@ -1338,6 +1865,309 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return None
 
+    def _get_block_color_name(self, block, block_entity=None) -> Optional[str]:
+        """
+        Reads a common Bedrock color state and converts it into a color name.
+        """
+        color = self._get_block_entity_nbt_value(block_entity, "color")
+
+        if color is None:
+            color = self._get_block_property(
+                block,
+                (
+                    "color",
+                    "colour",
+                    "color_bit",
+                    "color_value",
+                    "minecraft:color",
+                ),
+            )
+
+        if color is None:
+            return None
+
+        if isinstance(color, int):
+            if 0 <= color < len(self.BED_COLOR_NAMES):
+                return self.BED_COLOR_NAMES[color]
+            return None
+
+        color_text = str(color).strip().lower()
+
+        if color_text.startswith("minecraft:"):
+            color_text = color_text.split(":", 1)[1]
+
+        color_text = color_text.replace(" ", "_").replace("-", "_")
+        color_text = self.COLOR_NAME_ALIASES.get(color_text, color_text)
+
+        if color_text in self.BED_COLOR_NAMES:
+            return color_text
+
+        return None
+
+    def _get_stained_terracotta_item_name(self, block, block_entity=None) -> Optional[str]:
+        """
+        Converts generic stained terracotta into its colored inventory item name.
+        """
+        color_name = self._get_block_color_name(block, block_entity)
+
+        if color_name is None:
+            return None
+
+        return self.TERRACOTTA_ITEM_BY_COLOR.get(color_name)
+
+    def _get_glazed_terracotta_item_name(self, block, block_entity=None) -> Optional[str]:
+        """
+        Converts generic glazed terracotta into its colored inventory item name.
+        """
+        color_name = self._get_block_color_name(block, block_entity)
+
+        if color_name is None:
+            return None
+
+        return self.GLAZED_TERRACOTTA_ITEM_BY_COLOR.get(color_name)
+
+    def _get_candle_cake_item_name(self, block, key: str) -> str:
+        """
+        Preserves colored candle cake block item names when unusual blocks are included.
+        """
+        key = self.ITEM_NAME_OVERRIDES.get(str(key), str(key))
+
+        if key in self.CANDLE_CAKE_CANDLE_BY_BLOCK:
+            return key
+
+        color = self._get_block_property(
+            block,
+            (
+                "color",
+                "colour",
+                "candle_color",
+                "candle_colour",
+                "candle_type",
+                "candle",
+                "type",
+            ),
+        )
+        color_text = self._normalize_state_text(color)
+
+        if not color_text:
+            block_key = self._get_namespaced_block_name(block) or ""
+            block_key = block_key.split(":", 1)[1] if ":" in block_key else block_key
+            color_text = self._normalize_state_text(block_key)
+
+        if color_text in ("candle", "candle_cake", "none", "normal", ""):
+            return "minecraft:candle_cake"
+
+        color_text = color_text.removesuffix("_candle_cake")
+        color_text = color_text.removesuffix("_candle")
+        color_text = self.COLOR_NAME_ALIASES.get(color_text, color_text)
+
+        colored_key = f"minecraft:{color_text}_candle_cake"
+        if colored_key in self.CANDLE_CAKE_CANDLE_BY_BLOCK:
+            return colored_key
+
+        return key
+
+    def _get_candle_export_amount(self, block, item_name: str) -> int:
+        """
+        Reads the Bedrock candle count state and converts it into an item amount.
+
+        Bedrock stores placed candle groups as one candle block with a candles
+        state value from 0 to 3, which represents 1 to 4 candle items.
+        """
+        item_name = self.ITEM_NAME_OVERRIDES.get(str(item_name), str(item_name))
+
+        if item_name not in self.CANDLE_ITEM_BLOCKS:
+            return 1
+
+        candle_count = self._get_block_property(
+            block,
+            (
+                "candles",
+                "candle_count",
+                "cluster_count",
+                "count",
+            ),
+        )
+
+        try:
+            candle_count_value = int(candle_count)
+        except Exception:
+            return 1
+
+        if 0 <= candle_count_value <= 3:
+            return candle_count_value + 1
+
+        if 1 <= candle_count_value <= 4:
+            return candle_count_value
+
+        return 1
+
+    def _normalize_state_text(self, value) -> str:
+        """
+        Normalizes a block-state value into a lowercase identifier fragment.
+        """
+        if value is None:
+            return ""
+
+        text = str(self._tag_to_python_value(value)).strip().lower()
+
+        if text.startswith("minecraft:"):
+            text = text.split(":", 1)[1]
+
+        return text.replace(" ", "_").replace("-", "_")
+
+    def _get_wall_item_name(self, block) -> Optional[str]:
+        """
+        Converts generic legacy wall blocks into a specific wall item when possible.
+        """
+        wall_type = self._get_block_property(
+            block,
+            (
+                "wall_block_type",
+                "wall_type",
+                "stone_wall_type",
+                "wall_material",
+                "material",
+                "type",
+            ),
+        )
+        wall_type = self._normalize_state_text(wall_type)
+
+        if not wall_type:
+            return None
+
+        wall_type = wall_type.removesuffix("_wall")
+        return self.WALL_ITEM_BY_TYPE.get(wall_type)
+
+    def _get_door_item_name(self, block) -> Optional[str]:
+        """
+        Converts generic legacy door blocks into a specific door item when possible.
+        """
+        door_type = self._get_block_property(
+            block,
+            (
+                "door_type",
+                "wood_type",
+                "wood",
+                "material",
+                "type",
+            ),
+        )
+        door_type = self._normalize_state_text(door_type)
+
+        if not door_type:
+            return None
+
+        door_type = door_type.removesuffix("_door")
+        return self.DOOR_ITEM_BY_TYPE.get(door_type)
+
+    def _get_sign_family_type(self, block) -> str:
+        """
+        Reads the wood family from generic and old-style sign block names.
+        """
+        block_key = self._get_namespaced_block_name(block) or ""
+        block_key = block_key.split(":", 1)[1] if ":" in block_key else block_key
+
+        sign_type = self._get_block_property(
+            block,
+            (
+                "wood_type",
+                "sign_type",
+                "hanging_sign_type",
+                "material",
+                "type",
+            ),
+        )
+        sign_type = self._normalize_state_text(sign_type)
+
+        if not sign_type or sign_type in ("standing", "wall", "hanging", "sign"):
+            sign_type = self._normalize_state_text(block_key)
+
+        if sign_type in ("sign", "standing_sign", "wall_sign"):
+            return "oak"
+
+        if sign_type in ("hanging_sign", "wall_hanging_sign"):
+            return "oak"
+
+        if sign_type.endswith("_wall_hanging_sign"):
+            sign_type = sign_type[:-18]
+
+        if sign_type.endswith("_hanging_sign"):
+            sign_type = sign_type[:-13]
+
+        if sign_type.endswith("_wall_sign"):
+            sign_type = sign_type[:-10]
+
+        if sign_type.endswith("_standing_sign"):
+            sign_type = sign_type[:-14]
+
+        if sign_type.endswith("_sign"):
+            sign_type = sign_type[:-5]
+
+        return sign_type
+
+    def _get_sign_item_name(self, block) -> Optional[str]:
+        """
+        Converts generic standing / wall sign blocks into their matching sign item.
+        """
+        sign_type = self._get_sign_family_type(block)
+        if not sign_type:
+            return None
+        return self.SIGN_ITEM_BY_TYPE.get(sign_type)
+
+    def _get_hanging_sign_item_name(self, block) -> Optional[str]:
+        """
+        Converts generic hanging sign blocks into their matching hanging sign item.
+        """
+        sign_type = self._get_sign_family_type(block)
+        if not sign_type:
+            return None
+        return self.HANGING_SIGN_ITEM_BY_TYPE.get(sign_type)
+
+    def _get_bars_item_name(self, block) -> str:
+        """
+        Converts old generic bars blocks into iron or copper bar items.
+
+        If the block state does not expose a copper variant, the legacy
+        minecraft:bars block is treated as iron bars.
+        """
+        bars_type = self._get_block_property(
+            block,
+            (
+                "bars_type",
+                "bar_type",
+                "copper_type",
+                "oxidization",
+                "oxidation",
+                "weathering",
+                "material",
+                "type",
+            ),
+        )
+        bars_type = self._normalize_state_text(bars_type)
+
+        if not bars_type:
+            block_key = self._get_namespaced_block_name(block) or ""
+            block_key = block_key.split(":", 1)[1] if ":" in block_key else block_key
+            bars_type = self._normalize_state_text(block_key)
+
+        bars_type = bars_type.removesuffix("_bars")
+        bars_type = bars_type.removesuffix("_bar")
+
+        waxed = self._get_block_property(block, ("waxed", "waxed_bit", "is_waxed"))
+        is_waxed = self._is_truthy_state_value(waxed)
+
+        if bars_type in ("bars", "iron", ""):
+            return "minecraft:iron_bars"
+
+        if bars_type in ("none", "unweathered", "normal"):
+            bars_type = "copper"
+
+        if is_waxed and not bars_type.startswith("waxed_"):
+            bars_type = f"waxed_{bars_type}"
+
+        return self.BARS_ITEM_BY_TYPE.get(bars_type, "minecraft:iron_bars")
+
     def _get_pitcher_crop_item_name(self, block) -> str:
         """
         Converts pitcher crop growth into the survival item result.
@@ -1378,11 +2208,64 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return "minecraft:frame"
 
+    def _get_banner_item_name(self, block, block_entity) -> str:
+        """
+        Converts placed banners and wall banners into color-preserving item keys.
+        """
+        base_color = self._get_block_entity_nbt_value(block_entity, "Base")
+
+        if base_color is None:
+            base_color = self._get_block_property(
+                block,
+                (
+                    "base",
+                    "Base",
+                    "color",
+                    "colour",
+                    "ground_sign_direction",
+                ),
+            )
+
+        try:
+            base_color_value = int(base_color)
+        except Exception:
+            base_color_value = 0
+
+        base_color_value = max(0, min(15, base_color_value))
+        return f"{self.BANNER_ITEM_PREFIX}{base_color_value}"
+
+    def _is_banner_item_key(self, item_name: str) -> bool:
+        """
+        Checks for the internal color-preserving banner item key format.
+        """
+        return str(item_name).startswith(self.BANNER_ITEM_PREFIX)
+
+    def _make_item_extra_tag(self, item_name: str):
+        """
+        Builds optional item tag data for items that need it.
+        """
+        if not self._is_banner_item_key(item_name):
+            return None
+
+        if TAG_Compound is None or TAG_Int is None:
+            return None
+
+        tag = TAG_Compound()
+        tag["Type"] = TAG_Int(0)
+        return tag
+
     def _get_item_nbt_name_damage(self, item_name: str) -> Tuple[str, int]:
         """
         Converts display item names into the Bedrock inventory name and damage value.
         """
         item_name = self.ITEM_NAME_OVERRIDES.get(str(item_name), str(item_name))
+
+        if self._is_banner_item_key(item_name):
+            try:
+                banner_damage = int(item_name.replace(self.BANNER_ITEM_PREFIX, "", 1))
+            except Exception:
+                banner_damage = 0
+            return "minecraft:banner", max(0, min(15, banner_damage))
 
         if item_name in self.BED_COLOR_BY_ITEM_NAME:
             color_name = self.BED_COLOR_BY_ITEM_NAME[item_name]
@@ -1411,6 +2294,26 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         if key in ("minecraft:item_frame_block", "minecraft:frame", "minecraft:glow_frame"):
             key = self._get_item_frame_item_name(block, key)
+        elif key in ("minecraft:banner", "minecraft:standing_banner", "minecraft:wall_banner"):
+            key = self._get_banner_item_name(block, block_entity)
+        elif (
+            key in ("minecraft:sign", "minecraft:standing_sign", "minecraft:wall_sign")
+            or key.endswith("_standing_sign")
+            or key.endswith("_wall_sign")
+        ):
+            sign_item = self._get_sign_item_name(block)
+            key = sign_item if sign_item else self.ITEM_NAME_OVERRIDES.get(key, key)
+        elif (
+            key in ("minecraft:hanging_sign", "minecraft:wall_hanging_sign")
+            or key.endswith("_hanging_sign")
+            or key.endswith("_wall_hanging_sign")
+        ):
+            hanging_sign_item = self._get_hanging_sign_item_name(block)
+            key = hanging_sign_item if hanging_sign_item else self.ITEM_NAME_OVERRIDES.get(key, key)
+        elif key == "minecraft:candle_cake" or key.endswith("_candle_cake"):
+            key = self._get_candle_cake_item_name(block, key)
+        elif key == "minecraft:bars" or key.endswith("_bars"):
+            key = self._get_bars_item_name(block)
         else:
             key = self.ITEM_NAME_OVERRIDES.get(key, key)
 
@@ -1424,6 +2327,29 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             bed_color = self._get_bed_color_name(block, block_entity)
             if bed_color:
                 key = f"minecraft:{bed_color}_bed"
+
+        if key == "minecraft:stained_terracotta":
+            terracotta_item = self._get_stained_terracotta_item_name(block, block_entity)
+            if terracotta_item:
+                key = terracotta_item
+
+        if key == "minecraft:glazed_terracotta":
+            glazed_terracotta_item = self._get_glazed_terracotta_item_name(block, block_entity)
+            if glazed_terracotta_item:
+                key = glazed_terracotta_item
+
+        if key == "minecraft:wall":
+            wall_item = self._get_wall_item_name(block)
+            if wall_item:
+                key = wall_item
+
+        if key == "minecraft:door":
+            door_item = self._get_door_item_name(block)
+            if door_item:
+                key = door_item
+
+        if not self.include_unusual.GetValue() and key in self.CANDLE_CAKE_CANDLE_BY_BLOCK:
+            key = "minecraft:cake"
 
         if key == "minecraft:pitcher_crop":
             key = self._get_pitcher_crop_item_name(block)
@@ -1459,6 +2385,40 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             return False
 
         return True
+
+    def _get_extra_export_items_for_block(self, block) -> List[Tuple[str, int]]:
+        """
+        Returns extra item drops for special blocks that become multiple items.
+        """
+        if self.include_unusual.GetValue():
+            return []
+
+        key = self._get_namespaced_block_name(block)
+
+        if key is None:
+            return []
+
+        key = self.ITEM_NAME_OVERRIDES.get(key, key)
+
+        candle_item = self.CANDLE_CAKE_CANDLE_BY_BLOCK.get(key)
+        if candle_item:
+            return [(candle_item, 1)]
+
+        return []
+
+    def _record_export_count(self, counts: Dict[str, int], item_name: str, amount: int = 1) -> None:
+        """
+        Adds an exported item count and preserves first-seen scan order.
+        """
+        item_name = self.ITEM_NAME_OVERRIDES.get(str(item_name), str(item_name))
+
+        if not self._is_safe_item_key(item_name):
+            return
+
+        if counts[item_name] == 0:
+            self._scan_order.append(item_name)
+
+        counts[item_name] += int(amount)
 
     def _universal_string(self, value: str):
         """
@@ -1598,6 +2558,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
             if nested_items:
                 item["tag"] = self._make_shulker_item_tag(nested_items)
+            else:
+                extra_tag = self._make_item_extra_tag(item_name)
+                if extra_tag is not None:
+                    item["tag"] = extra_tag
 
             items.append(item)
 
@@ -1729,6 +2693,11 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             item["Name"] = TAG_String(actual_name)
             item["Count"] = TAG_Byte(int(count))
             item["Damage"] = TAG_Short(int(damage_value))
+
+            extra_tag = self._make_item_extra_tag(item_name)
+            if extra_tag is not None:
+                item["tag"] = extra_tag
+
             items.append(item)
 
         return tag
@@ -1768,9 +2737,30 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return total
 
+    def _get_item_stack_limit(self, item_name: str) -> int:
+        """
+        Returns the maximum stack size for an exported item.
+
+        Most block items stack to 64, but some converted items such as beds
+        and shulker boxes should stay as one item per slot.
+        """
+        item_name = self.ITEM_NAME_OVERRIDES.get(str(item_name), str(item_name))
+        actual_name, _damage_value = self._get_item_nbt_name_damage(item_name)
+
+        if item_name in self.NON_STACKABLE_ITEMS or actual_name in self.NON_STACKABLE_ITEMS:
+            return 1
+
+        if item_name in self.BED_COLOR_BY_ITEM_NAME:
+            return 1
+
+        if self._is_shulker_item_name(item_name):
+            return 1
+
+        return self.ITEM_STACK_LIMIT
+
     def _split_into_stacks(self, item_name: str, total_count: int) -> List[Tuple[str, int]]:
         """
-        Splits a counted block type into Minecraft-sized 64-item stacks.
+        Splits a counted block type into valid Minecraft-sized item stacks.
         """
         stacks: List[Tuple[str, int]] = []
         item_name = self.ITEM_NAME_OVERRIDES.get(item_name, item_name)
@@ -1778,10 +2768,13 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         if not self._is_safe_item_key(item_name):
             return stacks
 
+        stack_limit = self._get_item_stack_limit(item_name)
+        stack_limit = max(1, min(self.ITEM_STACK_LIMIT, int(stack_limit)))
+
         remaining = int(total_count)
 
         while remaining > 0:
-            take = self.ITEM_STACK_LIMIT if remaining >= self.ITEM_STACK_LIMIT else remaining
+            take = stack_limit if remaining >= stack_limit else remaining
             stacks.append((item_name, take))
             remaining -= take
 
@@ -1919,13 +2912,13 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     def _chunk_coords(self, x: int, z: int) -> Tuple[int, int]:
         """
-        Converts world x/z coordinates to chunk coordinates.
+        Converts world x, z coordinates to chunk coordinates.
         """
         return x // 16, z // 16
 
     def _local_coords(self, x: int, z: int) -> Tuple[int, int]:
         """
-        Converts world x/z coordinates to local chunk coordinates.
+        Converts world x, z coordinates to local chunk coordinates.
         """
         return x % 16, z % 16
 
@@ -1984,7 +2977,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         """
         Reads a block through Amulet translation for cases where direct chunk names are too generic.
         """
-        block, ent = self.world.get_version_block(
+        block, _ent = self.world.get_version_block(
             x,
             y,
             z,
@@ -2114,13 +3107,44 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 max_z = z if z > max_z else max_z
 
             block = self._get_block_for_scan(x, y, z, chunk_cache)
+            scan_block = block
+            raw_scan_key = self._get_namespaced_block_name(block)
             export_key, skipped_key = self._classify_block(block)
 
-            ambiguous_lookup_needed = export_key in self.AMBIGUOUS_FAST_SCAN_BLOCKS
+            raw_scan_needs_safe_lookup = (
+                raw_scan_key in self.STATE_SENSITIVE_SCAN_BLOCKS
+                or raw_scan_key in self.AMBIGUOUS_FAST_SCAN_BLOCKS
+                or str(raw_scan_key).endswith("_door")
+                or str(raw_scan_key).endswith("_sign")
+                or str(raw_scan_key).endswith("_hanging_sign")
+                or str(raw_scan_key).endswith("_banner")
+                or str(raw_scan_key).endswith("_candle_cake")
+                or (str(raw_scan_key).endswith("_candle") and not str(raw_scan_key).endswith("_candle_cake"))
+                or str(raw_scan_key).endswith("_bars")
+            )
+            ambiguous_lookup_needed = (
+                export_key in self.AMBIGUOUS_FAST_SCAN_BLOCKS
+                or raw_scan_key in self.AMBIGUOUS_FAST_SCAN_BLOCKS
+            )
             needs_safe_lookup = (
-                ambiguous_lookup_needed
+                raw_scan_needs_safe_lookup
+                or ambiguous_lookup_needed
                 or export_key in self.STATE_SENSITIVE_SCAN_BLOCKS
                 or skipped_key in self.STATE_SENSITIVE_SCAN_BLOCKS
+                or str(export_key).endswith("_door")
+                or str(skipped_key).endswith("_door")
+                or str(export_key).endswith("_sign")
+                or str(skipped_key).endswith("_sign")
+                or str(export_key).endswith("_hanging_sign")
+                or str(skipped_key).endswith("_hanging_sign")
+                or str(export_key).endswith("_banner")
+                or str(skipped_key).endswith("_banner")
+                or str(export_key).endswith("_candle_cake")
+                or str(skipped_key).endswith("_candle_cake")
+                or (str(export_key).endswith("_candle") and not str(export_key).endswith("_candle_cake"))
+                or (str(skipped_key).endswith("_candle") and not str(skipped_key).endswith("_candle_cake"))
+                or str(export_key).endswith("_bars")
+                or str(skipped_key).endswith("_bars")
             )
 
             if needs_safe_lookup:
@@ -2129,6 +3153,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                     safe_export_key, safe_skipped_key = self._classify_block(safe_block, safe_block_entity)
 
                     if safe_export_key is not None or safe_skipped_key is not None:
+                        scan_block = safe_block
                         export_key = safe_export_key
                         skipped_key = safe_skipped_key
                         if ambiguous_lookup_needed:
@@ -2143,20 +3168,23 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 skipped_key = export_key
                 export_key = None
 
+            extra_export_items = self._get_extra_export_items_for_block(scan_block)
+
             if skipped_key == "minecraft:bedrock" and self.preserve_bedrock.GetValue():
                 protected_positions.add((x, y, z))
 
             if skipped_key is not None:
                 skipped_counts[skipped_key] += 1
+                for extra_item_name, extra_amount in extra_export_items:
+                    self._record_export_count(counts, extra_item_name, extra_amount)
                 continue
 
-            if export_key is None:
-                continue
+            if export_key is not None:
+                export_amount = self._get_candle_export_amount(scan_block, export_key)
+                self._record_export_count(counts, export_key, export_amount)
 
-            if counts[export_key] == 0:
-                self._scan_order.append(export_key)
-
-            counts[export_key] += 1
+            for extra_item_name, extra_amount in extra_export_items:
+                self._record_export_count(counts, extra_item_name, extra_amount)
 
         if min_x is None:
             return counts, skipped_counts, protected_positions, None, scanned_positions
@@ -2245,7 +3273,15 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             return positions
 
         for line_index in range(secondary_len):
-            for primary_offset in range(primary_len):
+            for visual_primary_index in range(primary_len):
+                primary_offset = self._get_primary_offset_for_visual_index(
+                    primary_axis,
+                    visual_primary_index,
+                    line_index,
+                    primary_len,
+                    bounds,
+                )
+
                 for vertical_offset in range(stack_height):
                     y = min_y + vertical_offset
 
@@ -2314,13 +3350,20 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         current_line = 0
         current_primary = 0
 
-        def make_pos(primary_offset: int, line_index: int, vertical_offset: int) -> Tuple[int, int, int]:
+        def make_pos(visual_primary_index: int, line_index: int, vertical_offset: int) -> Tuple[int, int, int]:
+            primary_offset = self._get_primary_offset_for_visual_index(
+                primary_axis,
+                visual_primary_index,
+                line_index,
+                primary_len,
+                bounds,
+            )
             y = min_y + vertical_offset
             if primary_axis == "x":
                 return min_x + primary_offset, y, min_z + line_index
             return min_x + line_index, y, min_z + primary_offset
 
-        for item_name, start_index, end_index in group_ranges:
+        for _item_name, start_index, end_index in group_ranges:
             group_needed = end_index - start_index
             group_placed = 0
 
@@ -2408,25 +3451,36 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         pair_axis = self._choose_double_chest_axis(x_len, z_len)
 
         if pair_axis == "x":
+            primary_block_len = x_len
             primary_len = x_len // 2
             secondary_len = z_len
         else:
+            primary_block_len = z_len
             primary_len = z_len // 2
             secondary_len = x_len
 
         for line_index in range(secondary_len):
-            for primary_offset in range(primary_len):
+            for visual_pair_index in range(primary_len):
+                visual_primary_block = visual_pair_index * 2
+                primary_block_offset = self._get_double_chest_primary_offset_for_visual_index(
+                    pair_axis,
+                    visual_primary_block,
+                    line_index,
+                    primary_block_len,
+                    bounds,
+                )
+
                 for vertical_offset in range(stack_height):
                     y = min_y + vertical_offset
 
                     if pair_axis == "x":
-                        x1 = min_x + (primary_offset * 2)
+                        x1 = min_x + primary_block_offset
                         z1 = min_z + line_index
                         x2 = x1 + 1
                         z2 = z1
                     else:
                         x1 = min_x + line_index
-                        z1 = min_z + (primary_offset * 2)
+                        z1 = min_z + primary_block_offset
                         x2 = x1
                         z2 = z1 + 1
 
@@ -2491,7 +3545,14 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         current_line = 0
         current_primary_block = 0
 
-        def make_pair(primary_block_offset: int, line_index: int, vertical_offset: int):
+        def make_pair(visual_primary_block: int, line_index: int, vertical_offset: int):
+            primary_block_offset = self._get_double_chest_primary_offset_for_visual_index(
+                pair_axis,
+                visual_primary_block,
+                line_index,
+                primary_block_len,
+                bounds,
+            )
             y = min_y + vertical_offset
             if pair_axis == "x":
                 x1 = min_x + primary_block_offset
@@ -2501,7 +3562,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             z1 = min_z + primary_block_offset
             return (x1, y, z1), (x1, y, z1 + 1), pair_axis
 
-        for item_name, start_index, end_index in group_ranges:
+        for _item_name, start_index, end_index in group_ranges:
             group_needed = end_index - start_index
             group_placed = 0
 
@@ -2683,13 +3744,47 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     ) -> None:
         """
         Places single storage containers and their inventories into chunks.
+
+        The selected container type and repeated block states are cached before
+        the loop so single-container placement does not repeatedly query wx UI
+        controls or rebuild identical universal blocks for every storage block.
         """
+        container = self._get_selected_container()
         entity_name = self._get_storage_entity_name()
         chunk_cache = {}
+        block_cache: Dict[str, Block] = {}
+
+        if container == self.CONTAINER_SHULKER:
+            shulker_color = self.shulker_color_choice.GetStringSelection()
+            if not shulker_color:
+                shulker_color = "default"
+        else:
+            shulker_color = "default"
+
+        def get_storage_block(facing: str) -> Block:
+            if facing in block_cache:
+                return block_cache[facing]
+
+            if container == self.CONTAINER_BARREL:
+                block = self._make_universal_barrel(facing=facing)
+            elif container == self.CONTAINER_SHULKER:
+                block = Block(
+                    "universal_minecraft",
+                    "shulker_box",
+                    {
+                        "color": self._universal_string(shulker_color),
+                        "facing": self._universal_string(facing),
+                    },
+                )
+            else:
+                block = self._make_universal_chest(facing=facing, connection="none")
+
+            block_cache[facing] = block
+            return block
 
         for (x, y, z), stacks in zip(positions, inventories):
             facing = self._get_inward_facing(x, z, bounds)
-            universal_block = self._make_universal_storage_block(facing=facing)
+            universal_block = get_storage_block(facing)
 
             nbt = self._make_inventory_nbt(stacks)
             universal_entity = BlockEntity("universal_minecraft", entity_name, x, y, z, nbt)
@@ -2722,8 +3817,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         chunk_cache = {}
 
         for (first_pos, second_pos, pair_axis), stacks in zip(chest_pairs, chest_inventories):
-            x1, y1, z1 = first_pos
-            x2, y2, z2 = second_pos
+            x1, _y1, z1 = first_pos
+            x2, _y2, z2 = second_pos
             facing = self._get_double_chest_facing(pair_axis, x1, z1, x2, z2, bounds)
             left_pos, right_pos, left_connection, right_connection = self._get_double_chest_left_right(
                 first_pos,
@@ -2824,6 +3919,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         item["Name"] = TAG_String(actual_name)
         item["WasPickedUp"] = TAG_Byte(0)
 
+        extra_tag = self._make_item_extra_tag(item_name)
+        if extra_tag is not None:
+            item["tag"] = extra_tag
+
         if self._should_write_item_block_tag(item_name):
             block = TAG_Compound()
             block["name"] = TAG_String(actual_name)
@@ -2876,7 +3975,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         occupied: Set[Tuple[int, int, int]] = set()
 
         if use_double_chests:
-            for first_pos, second_pos, pair_axis in storage_positions:
+            for first_pos, second_pos, _pair_axis in storage_positions:
                 occupied.add(first_pos)
                 occupied.add(second_pos)
         else:
@@ -2916,10 +4015,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             try:
                 if use_double_chests:
                     first_pos, second_pos, pair_axis = storage_positions[storage_index]
-                    x1, y1, z1 = first_pos
-                    x2, y2, z2 = second_pos
+                    x1, _y1, z1 = first_pos
+                    x2, _y2, z2 = second_pos
                     facing = self._get_double_chest_facing(pair_axis, x1, z1, x2, z2, bounds)
-                    left_pos, right_pos, left_connection, right_connection = self._get_double_chest_left_right(
+                    left_pos, _right_pos, _left_connection, _right_connection = self._get_double_chest_left_right(
                         first_pos,
                         second_pos,
                         pair_axis,
