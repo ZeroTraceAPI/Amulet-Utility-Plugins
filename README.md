@@ -36,13 +36,13 @@ Preview screenshots are available in the `Media` folder.
 
 ![Auto Light screenshot](Media/Auto-Light/AL-S1.jpg)
 
-More Auto Light screenshots: [`Media/Auto-Light`](Media/Auto-Light)
+More screenshots: [`Media/Auto-Light`](Media/Auto-Light)
 
 ### Blocks to Storage
 
 ![Blocks to Storage screenshot](Media/Blocks-to-Storage/BtS-S2.jpg)
 
-More Blocks to Storage screenshots: [`Media/Blocks-to-Storage`](Media/Blocks-to-Storage)
+More screenshots: [`Media/Blocks-to-Storage`](Media/Blocks-to-Storage)
 
 ## Installation (Windows)
 
@@ -52,10 +52,9 @@ More Blocks to Storage screenshots: [`Media/Blocks-to-Storage`](Media/Blocks-to-
 %LOCALAPPDATA%\AmuletTeam\AmuletMapEditor\plugins\operations
 ```
 3. Restart Amulet Editor.
-4. Open the Operations tab.
-5. Refresh plugins if needed.
+4. Open the Operations tab and refresh the plugins if needed.
 
-If the folders do not exist yet, create them manually.
+Create the folders manually if needed.
 
 
 ## Cost
@@ -64,24 +63,20 @@ These plugins are free from the original maintainer. Donations may be accepted, 
 
 ## Official Source
 
-The official source for this project is the [Amulet Utility Plugins GitHub repository](https://github.com/ZeroTraceAPI/Amulet-Utility-Plugins).
+The official source is the [Amulet Utility Plugins GitHub repository](https://github.com/ZeroTraceAPI/Amulet-Utility-Plugins).
 
 If you share, fork, modify, package, or redistribute these plugins, please link back to the official source so users can find a clean and current copy.
 
 ## Contributing
 
-Contributions are welcome. This includes bug reports, feature requests, new ideas, testing notes, documentation improvements, and code changes.
-
-Before contributing, please read [`CONTRIBUTING.md`](CONTRIBUTING.md) so you understand the project rules, contribution terms, review process, and licensing expectations.
+Contributions are welcome. This includes bug reports, feature requests, new ideas, testing notes, documentation improvements, and code changes. Read [`CONTRIBUTING.md`](CONTRIBUTING.md) for more details.
 
 ## Contact
 
-For normal questions, bug reports, feature requests, and public discussion, please use GitHub Issues or GitHub Discussions when possible.
-
+For questions, reports, requests, and public discussion, please use GitHub Issues or GitHub Discussions when possible. 
 If you do not want to create a GitHub account, you can contact the maintainer by email:
 
 `ZeroTraceAPI@proton.me`
 
-Please include the plugin name, plugin version, Amulet version, Minecraft Bedrock version, and a clear description of the issue or question when relevant.
-
+When relevant, include the plugin version, Amulet version, Minecraft Bedrock version, and a clear description. 
 Email support is not guaranteed, but reasonable project-related messages are welcome.
