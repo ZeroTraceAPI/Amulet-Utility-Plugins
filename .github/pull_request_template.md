@@ -42,16 +42,26 @@ Check all that apply:
 
 Describe how you tested this change.
 
-Include the Amulet version, Minecraft edition, Minecraft version, and operating system if relevant.
+Include the Amulet version, Minecraft edition, Minecraft version, and operating system when relevant.
 
 ```text
 OS:
 Amulet version:
 Minecraft edition:
 Minecraft version:
-Plugin file/version:
+Plugin file / version:
 Testing notes:
 ```
+
+For plugin changes, check the relevant items:
+
+- [ ] The plugin loaded successfully in Amulet.
+- [ ] The changed settings or behavior were tested.
+- [ ] Normal default behavior was retested.
+- [ ] The export report was reviewed, when applicable.
+- [ ] In-game output was checked for conversion, storage, NBT, or item-frame changes, when applicable.
+
+Leave boxes unchecked when they do not apply, and explain any testing that could not be completed.
 
 ---
 
