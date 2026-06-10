@@ -258,6 +258,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:bamboo_hanging_sign",
         "minecraft:crimson_hanging_sign",
         "minecraft:warped_hanging_sign",
+        "minecraft:stonecutter_block",
     }
 
     STATE_SENSITIVE_SCAN_BLOCKS = {
@@ -380,8 +381,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:fire_fly_bush": "minecraft:firefly_bush",
         "minecraft:small_dripleaf": "minecraft:small_dripleaf_block",
         "minecraft:item_frame_block": "minecraft:frame",
-        "minecraft:stonecutter_block": "minecraft:stonecutter",
-        "minecraft:stonecutter_old": "minecraft:stonecutter",
+        "minecraft:stonecutter": "minecraft:stonecutter_block",
+        "minecraft:stonecutter_old": "minecraft:stonecutter_block",
         "minecraft:chain": "minecraft:iron_chain",
         "minecraft:oak_door": "minecraft:wooden_door",
         "minecraft:nether_bricks": "minecraft:nether_brick",
@@ -436,6 +437,15 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:bamboo_standing_sign": "minecraft:bamboo_sign",
         "minecraft:crimson_standing_sign": "minecraft:crimson_sign",
         "minecraft:warped_standing_sign": "minecraft:warped_sign",
+    }
+
+    DOUBLE_SLAB_ITEM_OVERRIDES = {
+        "minecraft:double_slab": "minecraft:slab",
+        "minecraft:double_wooden_slab": "minecraft:wooden_slab",
+        "minecraft:double_stone_slab": "minecraft:stone_slab",
+        "minecraft:double_stone_slab2": "minecraft:stone_slab2",
+        "minecraft:double_stone_slab3": "minecraft:stone_slab3",
+        "minecraft:double_stone_slab4": "minecraft:stone_slab4",
     }
 
     CANDLE_CAKE_CANDLE_BY_BLOCK = {
@@ -596,6 +606,44 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     }
 
     BANNER_ITEM_PREFIX = "minecraft:banner_damage_"
+
+    BANNER_COLOR_NAMES_BY_DAMAGE = [
+        "black",
+        "red",
+        "green",
+        "brown",
+        "blue",
+        "purple",
+        "cyan",
+        "light_gray",
+        "gray",
+        "pink",
+        "lime",
+        "yellow",
+        "light_blue",
+        "magenta",
+        "orange",
+        "white",
+    ]
+
+    BANNER_COLOR_NAME_BY_DAMAGE = {
+        color_index: color_name for color_index, color_name in enumerate(BANNER_COLOR_NAMES_BY_DAMAGE)
+    }
+
+    ABC_SORT_NAME_OVERRIDES = {
+        "minecraft:cobweb": "cobweb",
+        "minecraft:web": "cobweb",
+        "minecraft:frame": "item_frame",
+        "minecraft:glow_frame": "glow_item_frame",
+        "minecraft:iron_chain": "iron_chain",
+        "minecraft:wooden_door": "oak_door",
+        "minecraft:hardened_clay": "terracotta",
+        "minecraft:silver_glazed_terracotta": "light_gray_glazed_terracotta",
+        "minecraft:melon_block": "melon",
+        "minecraft:undyed_shulker_box": "shulker_box",
+        "minecraft:normal_stone_slab": "stone_slab",
+        "minecraft:normal_stone_double_slab": "stone_double_slab",
+    }
 
     ITEM_FRAME_NO_BLOCK_TAG_ITEMS = {
         "minecraft:bed",
@@ -771,6 +819,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         title = wx.StaticText(self.settings_panel, label="Blocks to Storage")
         self.settings_sizer.Add(title, 0, wx.ALL, 6)
 
+        self._add_settings_section("Storage settings")
+
         container_row = wx.BoxSizer(wx.HORIZONTAL)
         container_label = wx.StaticText(self.settings_panel, label="Storage container")
         self.storage_choice = wx.Choice(
@@ -797,6 +847,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self.shulker_color_row.Add(self.shulker_color_choice, 1)
         self.settings_sizer.Add(self.shulker_color_row, 0, wx.ALL | wx.EXPAND, 6)
 
+        self.use_double_chests = wx.CheckBox(self.settings_panel, label="Use double chests")
+        self.use_double_chests.SetValue(False)
+        self.settings_sizer.Add(self.use_double_chests, 0, wx.ALL, 6)
+
         stack_row = wx.BoxSizer(wx.HORIZONTAL)
         stack_label = wx.StaticText(self.settings_panel, label="Vertical stack height")
         self.stack_height = wx.SpinCtrl(
@@ -810,6 +864,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         stack_row.Add(self.stack_height, 0)
         self.settings_sizer.Add(stack_row, 0, wx.ALL, 6)
 
+        self._add_settings_section("Export behavior")
+
         self.include_unusual = wx.CheckBox(self.settings_panel, label="Include unusual blocks")
         self.include_unusual.SetValue(False)
         self.settings_sizer.Add(self.include_unusual, 0, wx.ALL, 6)
@@ -818,17 +874,11 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self.preserve_bedrock.SetValue(True)
         self.settings_sizer.Add(self.preserve_bedrock, 0, wx.ALL, 6)
 
-        self.fast_direct_scan = wx.CheckBox(self.settings_panel, label="Fast direct chunk scan")
-        self.fast_direct_scan.SetValue(True)
-        self.settings_sizer.Add(self.fast_direct_scan, 0, wx.ALL, 6)
+        self.alphabetical_order = wx.CheckBox(self.settings_panel, label="ABC item order")
+        self.alphabetical_order.SetValue(True)
+        self.settings_sizer.Add(self.alphabetical_order, 0, wx.ALL, 6)
 
-        self.fast_direct_clear = wx.CheckBox(self.settings_panel, label="Fast direct chunk clear")
-        self.fast_direct_clear.SetValue(True)
-        self.settings_sizer.Add(self.fast_direct_clear, 0, wx.ALL, 6)
-
-        self.show_large_selection_warning = wx.CheckBox(self.settings_panel, label="Show large selection warning")
-        self.show_large_selection_warning.SetValue(True)
-        self.settings_sizer.Add(self.show_large_selection_warning, 0, wx.ALL, 6)
+        self._add_settings_section("Separated groups")
 
         self.separate_types = wx.CheckBox(self.settings_panel, label="One block type per storage group")
         self.separate_types.SetValue(False)
@@ -852,13 +902,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         group_spacing_row.Add(self.group_spacing, 0)
         self.settings_sizer.Add(group_spacing_row, 0, wx.ALL, 6)
 
-        self.alphabetical_order = wx.CheckBox(self.settings_panel, label="ABC item order")
-        self.alphabetical_order.SetValue(True)
-        self.settings_sizer.Add(self.alphabetical_order, 0, wx.ALL, 6)
-
-        self.use_double_chests = wx.CheckBox(self.settings_panel, label="Use double chests")
-        self.use_double_chests.SetValue(False)
-        self.settings_sizer.Add(self.use_double_chests, 0, wx.ALL, 6)
+        self._add_settings_section("Nested shulker storage")
 
         self.use_nested_shulker_storage = wx.CheckBox(self.settings_panel, label="Pack into shulker boxes inside storage")
         self.use_nested_shulker_storage.SetValue(False)
@@ -886,6 +930,20 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self.nested_shulker_color_row.Add(self.nested_shulker_color_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
         self.nested_shulker_color_row.Add(self.nested_shulker_color_choice, 1)
         self.settings_sizer.Add(self.nested_shulker_color_row, 0, wx.ALL | wx.EXPAND, 6)
+
+        self._add_settings_section("Performance and safety")
+
+        self.fast_direct_scan = wx.CheckBox(self.settings_panel, label="Fast direct chunk scan")
+        self.fast_direct_scan.SetValue(True)
+        self.settings_sizer.Add(self.fast_direct_scan, 0, wx.ALL, 6)
+
+        self.fast_direct_clear = wx.CheckBox(self.settings_panel, label="Fast direct chunk clear")
+        self.fast_direct_clear.SetValue(True)
+        self.settings_sizer.Add(self.fast_direct_clear, 0, wx.ALL, 6)
+
+        self.show_large_selection_warning = wx.CheckBox(self.settings_panel, label="Show large selection warning")
+        self.show_large_selection_warning.SetValue(True)
+        self.settings_sizer.Add(self.show_large_selection_warning, 0, wx.ALL, 6)
 
         self._sizer.Add(self.settings_panel, 0, wx.ALL | wx.EXPAND, 0)
 
@@ -1047,6 +1105,18 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 window.SetToolTip(text)
             except Exception:
                 pass
+
+    def _add_settings_section(self, label: str) -> None:
+        section_label = wx.StaticText(self.settings_panel, label=label)
+
+        try:
+            font = section_label.GetFont()
+            font.SetWeight(wx.FONTWEIGHT_BOLD)
+            section_label.SetFont(font)
+        except Exception:
+            pass
+
+        self.settings_sizer.Add(section_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 6)
 
     def _get_selected_container(self) -> str:
         value = self.storage_choice.GetStringSelection()
@@ -1227,6 +1297,49 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         rate = amount / seconds
         return f"{rate:,.2f} {label}/second"
+
+    def _get_skipped_block_reason(self, item_name: str) -> str:
+        item_name = self.ITEM_NAME_OVERRIDES.get(str(item_name), str(item_name))
+
+        if item_name == "unknown_block":
+            return "Unknown / unsupported blocks"
+
+        if item_name == "minecraft:bedrock" and self.preserve_bedrock.GetValue():
+            return "Protected blocks preserved"
+
+        if item_name in self.KNOWN_UNSAFE_ITEM_BLOCKS:
+            return "Unsafe technical blocks"
+
+        if item_name in self.GENERIC_UNSAFE_ITEM_BLOCKS:
+            return "Unsupported generic block names"
+
+        if not self.include_unusual.GetValue() and item_name in self.DEFAULT_EXCLUDED_BLOCKS:
+            return "Default excluded blocks"
+
+        return "Other skipped blocks"
+
+    def _log_skipped_block_report(
+        self,
+        skipped_counts: Dict[str, int],
+        skipped_by_reason: Optional[Dict[str, Dict[str, int]]] = None,
+    ) -> None:
+        if not skipped_counts:
+            self._log("Skipped blocks: none")
+            return
+
+        if skipped_by_reason is None:
+            skipped_by_reason = collections.defaultdict(lambda: collections.defaultdict(int))
+            for item_name, amount in skipped_counts.items():
+                reason = self._get_skipped_block_reason(item_name)
+                skipped_by_reason[reason][item_name] += int(amount)
+
+        self._log("Skipped blocks by reason:")
+        for reason in sorted(skipped_by_reason.keys()):
+            reason_counts = skipped_by_reason[reason]
+            reason_total = sum(reason_counts.values())
+            self._log(f"{reason}: {reason_total:,}")
+            for item_name in sorted(reason_counts.keys()):
+                self._log(f"  {item_name} -> {reason_counts[item_name]:,}")
 
     def _clear_log(self) -> None:
         try:
@@ -1994,6 +2107,24 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return item_name, 0
 
+    def _get_cached_item_nbt_name_damage(
+        self,
+        item_name: str,
+        item_info_cache: Optional[Dict[str, Tuple[str, int]]] = None,
+    ) -> Tuple[str, int]:
+        cache_key = str(item_name)
+
+        if item_info_cache is None:
+            return self._get_item_nbt_name_damage(cache_key)
+
+        cached = item_info_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        value = self._get_item_nbt_name_damage(cache_key)
+        item_info_cache[cache_key] = value
+        return value
+
     def _should_write_item_block_tag(self, item_name: str) -> bool:
         actual_name, _damage = self._get_item_nbt_name_damage(item_name)
         return actual_name not in self.ITEM_FRAME_NO_BLOCK_TAG_ITEMS
@@ -2112,8 +2243,27 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return []
 
+    def _get_double_slab_export_item(self, item_name: str) -> Optional[str]:
+        item_name = self.ITEM_NAME_OVERRIDES.get(str(item_name), str(item_name))
+
+        override = self.DOUBLE_SLAB_ITEM_OVERRIDES.get(item_name)
+        if override:
+            return override
+
+        if item_name.endswith("_double_slab"):
+            return item_name[:-len("_double_slab")] + "_slab"
+
+        return None
+
     def _record_export_count(self, counts: Dict[str, int], item_name: str, amount: int = 1) -> None:
         item_name = self.ITEM_NAME_OVERRIDES.get(str(item_name), str(item_name))
+        amount = int(amount)
+
+        if not self.include_unusual.GetValue():
+            slab_item = self._get_double_slab_export_item(item_name)
+            if slab_item:
+                item_name = slab_item
+                amount *= 2
 
         if not self._is_safe_item_key(item_name):
             return
@@ -2121,7 +2271,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         if counts[item_name] == 0:
             self._scan_order.append(item_name)
 
-        counts[item_name] += int(amount)
+        counts[item_name] += amount
 
     def _universal_string(self, value: str):
         if StringTag is not None:
@@ -2195,6 +2345,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         stacks: Sequence[Tuple[str, int]],
         pair_position: Optional[Tuple[int, int]] = None,
         pair_lead: Optional[bool] = None,
+        item_info_cache: Optional[Dict[str, Tuple[str, int]]] = None,
     ):
         if NBTFile is None:
             raise RuntimeError("amulet_nbt is unavailable in this environment.")
@@ -2222,7 +2373,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             if not str(item_name).strip():
                 continue
 
-            actual_name, damage_value = self._get_item_nbt_name_damage(item_name)
+            actual_name, damage_value = self._get_cached_item_nbt_name_damage(item_name, item_info_cache)
 
             if not actual_name.strip():
                 continue
@@ -2234,7 +2385,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             item["Damage"] = TAG_Short(int(damage_value))
 
             if nested_items:
-                item["tag"] = self._make_shulker_item_tag(nested_items)
+                item["tag"] = self._make_shulker_item_tag(nested_items, item_info_cache)
             else:
                 extra_tag = self._make_item_extra_tag(item_name)
                 if extra_tag is not None:
@@ -2244,9 +2395,50 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return NBTFile(the_nbt)
 
+    def _normalize_abc_sort_text(self, display_name: str) -> str:
+        display_name = str(display_name).strip().lower()
+
+        if display_name.startswith("minecraft:"):
+            display_name = display_name.split(":", 1)[1]
+
+        display_name = display_name.replace(" ", "_").replace("-", "_")
+        display_name = self.COLOR_NAME_ALIASES.get(display_name, display_name)
+
+        if display_name.startswith("silver_"):
+            display_name = "light_gray_" + display_name[len("silver_"):]
+
+        while "__" in display_name:
+            display_name = display_name.replace("__", "_")
+
+        return display_name
+
+    def _get_display_sort_key(self, item_name: str) -> str:
+        item_name = str(item_name)
+
+        if self._is_banner_item_key(item_name):
+            try:
+                banner_damage = int(item_name.replace(self.BANNER_ITEM_PREFIX, "", 1))
+            except Exception:
+                banner_damage = 0
+
+            color_name = self.BANNER_COLOR_NAME_BY_DAMAGE.get(
+                max(0, min(15, banner_damage)),
+                "banner",
+            )
+            return self._normalize_abc_sort_text(f"{color_name}_banner")
+
+        display_name = self.ABC_SORT_NAME_OVERRIDES.get(item_name, item_name)
+        return self._normalize_abc_sort_text(display_name)
+
+    def _get_item_sort_key(self, item_name: str) -> str:
+        return self._get_display_sort_key(item_name)
+
     def _get_ordered_item_names(self, counts: Dict[str, int]) -> List[str]:
         if self.alphabetical_order.GetValue():
-            return sorted(counts.keys())
+            return sorted(
+                counts.keys(),
+                key=lambda item_name: (self._get_item_sort_key(item_name), str(item_name)),
+            )
 
         ordered: List[str] = []
         seen = set()
@@ -2301,14 +2493,20 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return mode
 
-    def _should_pack_stacks_into_nested_shulkers(self, item_name: str, stacks: Sequence[Tuple[str, int]]) -> bool:
+    def _should_pack_stacks_into_nested_shulkers(
+        self,
+        item_name: str,
+        stacks: Sequence[Tuple[str, int]],
+        mode: Optional[str] = None,
+    ) -> bool:
         if self._is_shulker_item_name(item_name):
             return False
 
         if not stacks:
             return False
 
-        mode = self._get_nested_shulker_mode()
+        if mode is None:
+            mode = self._get_nested_shulker_mode()
 
         if mode == self.NESTED_SHULKER_MODE_COMPACT:
             return True
@@ -2319,7 +2517,11 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         item_name = self.ITEM_NAME_OVERRIDES.get(str(item_name), str(item_name))
         return item_name == "minecraft:shulker_box" or item_name.endswith("_shulker_box")
 
-    def _make_shulker_item_tag(self, nested_items: Sequence[Tuple[str, int]]):
+    def _make_shulker_item_tag(
+        self,
+        nested_items: Sequence[Tuple[str, int]],
+        item_info_cache: Optional[Dict[str, Tuple[str, int]]] = None,
+    ):
         if TAG_Compound is None or TAG_List is None or TAG_Byte is None or TAG_String is None or TAG_Short is None:
             raise RuntimeError("amulet_nbt tag helpers are unavailable in this environment.")
 
@@ -2333,7 +2535,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             if not str(item_name).strip():
                 continue
 
-            actual_name, damage_value = self._get_item_nbt_name_damage(item_name)
+            actual_name, damage_value = self._get_cached_item_nbt_name_damage(item_name, item_info_cache)
 
             if not actual_name.strip():
                 continue
@@ -2355,21 +2557,16 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     def _pack_stacks_into_nested_shulker_items(
         self,
         stacks: Sequence[Tuple[str, int]],
+        shulker_item_name: Optional[str] = None,
     ) -> List[Tuple[str, int, List[Tuple[str, int]]]]:
-        shulker_items: List[Tuple[str, int, List[Tuple[str, int]]]] = []
-        current: List[Tuple[str, int]] = []
-        shulker_item_name = self._get_nested_shulker_item_name()
+        if shulker_item_name is None:
+            shulker_item_name = self._get_nested_shulker_item_name()
 
-        for stack in stacks:
-            current.append(stack)
-            if len(current) >= self.SHULKER_BOX_SLOT_COUNT:
-                shulker_items.append((shulker_item_name, 1, current))
-                current = []
-
-        if current:
-            shulker_items.append((shulker_item_name, 1, current))
-
-        return shulker_items
+        stack_list = list(stacks)
+        return [
+            (shulker_item_name, 1, list(stack_list[index:index + self.SHULKER_BOX_SLOT_COUNT]))
+            for index in range(0, len(stack_list), self.SHULKER_BOX_SLOT_COUNT)
+        ]
 
     def _count_nested_shulker_items(self, inventories: Sequence[Sequence[Tuple]]) -> int:
         total = 0
@@ -2397,21 +2594,23 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         return self.ITEM_STACK_LIMIT
 
     def _split_into_stacks(self, item_name: str, total_count: int) -> List[Tuple[str, int]]:
-        stacks: List[Tuple[str, int]] = []
         item_name = self.ITEM_NAME_OVERRIDES.get(item_name, item_name)
 
         if not self._is_safe_item_key(item_name):
-            return stacks
+            return []
 
         stack_limit = self._get_item_stack_limit(item_name)
         stack_limit = max(1, min(self.ITEM_STACK_LIMIT, int(stack_limit)))
 
         remaining = int(total_count)
+        if remaining <= 0:
+            return []
 
-        while remaining > 0:
-            take = stack_limit if remaining >= stack_limit else remaining
-            stacks.append((item_name, take))
-            remaining -= take
+        full_stacks, leftover = divmod(remaining, stack_limit)
+        stacks = [(item_name, stack_limit)] * full_stacks
+
+        if leftover:
+            stacks.append((item_name, leftover))
 
         return stacks
 
@@ -2420,19 +2619,13 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         stacks: Sequence[Tuple[str, int]],
         slot_count: int,
     ) -> List[List[Tuple[str, int]]]:
-        containers: List[List[Tuple[str, int]]] = []
-        current: List[Tuple[str, int]] = []
+        slot_count = max(1, int(slot_count))
+        stack_list = list(stacks)
 
-        for stack in stacks:
-            current.append(stack)
-            if len(current) >= slot_count:
-                containers.append(current)
-                current = []
-
-        if current:
-            containers.append(current)
-
-        return containers
+        return [
+            list(stack_list[index:index + slot_count])
+            for index in range(0, len(stack_list), slot_count)
+        ]
 
     def _build_container_payloads_and_group_starts(
         self,
@@ -2474,6 +2667,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         group_starts: List[Tuple[str, int]] = []
         slot_count = self._get_container_slot_count()
         item_names = self._get_ordered_item_names(counts)
+        nested_mode = self._get_nested_shulker_mode()
+        nested_shulker_item_name = self._get_nested_shulker_item_name()
 
         if self.separate_types.GetValue():
             for item_name in item_names:
@@ -2481,8 +2676,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 if not stacks:
                     continue
 
-                if self._should_pack_stacks_into_nested_shulkers(item_name, stacks):
-                    main_entries = self._pack_stacks_into_nested_shulker_items(stacks)
+                if self._should_pack_stacks_into_nested_shulkers(item_name, stacks, nested_mode):
+                    main_entries = self._pack_stacks_into_nested_shulker_items(stacks, nested_shulker_item_name)
                 else:
                     main_entries = stacks
 
@@ -2499,8 +2694,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 if not stacks:
                     continue
 
-                if self._should_pack_stacks_into_nested_shulkers(item_name, stacks):
-                    all_main_entries.extend(self._pack_stacks_into_nested_shulker_items(stacks))
+                if self._should_pack_stacks_into_nested_shulkers(item_name, stacks, nested_mode):
+                    all_main_entries.extend(self._pack_stacks_into_nested_shulker_items(stacks, nested_shulker_item_name))
                 else:
                     all_main_entries.extend(stacks)
 
@@ -2653,6 +2848,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     def _scan_selection(self):
         counts: Dict[str, int] = collections.defaultdict(int)
         skipped_counts: Dict[str, int] = collections.defaultdict(int)
+        skipped_by_reason: Dict[str, Dict[str, int]] = collections.defaultdict(lambda: collections.defaultdict(int))
         protected_positions: Set[Tuple[int, int, int]] = set()
 
         self._scan_order = []
@@ -2757,7 +2953,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 protected_positions.add((x, y, z))
 
             if skipped_key is not None:
+                skipped_reason = self._get_skipped_block_reason(skipped_key)
                 skipped_counts[skipped_key] += 1
+                skipped_by_reason[skipped_reason][skipped_key] += 1
                 for extra_item_name, extra_amount in extra_export_items:
                     self._record_export_count(counts, extra_item_name, extra_amount)
                 continue
@@ -2770,9 +2968,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 self._record_export_count(counts, extra_item_name, extra_amount)
 
         if min_x is None:
-            return counts, skipped_counts, protected_positions, None, scanned_positions
+            return counts, skipped_counts, skipped_by_reason, protected_positions, None, scanned_positions
 
-        return counts, skipped_counts, protected_positions, (min_x, min_y, min_z, max_x, max_y, max_z), scanned_positions
+        return counts, skipped_counts, skipped_by_reason, protected_positions, (min_x, min_y, min_z, max_x, max_y, max_z), scanned_positions
 
     def _is_protected_position(
         self,
@@ -3276,15 +3474,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return preserved_bedrock, cleared_blocks, "disabled"
 
-    def _place_single_storage_in_chunks(
-        self,
-        positions: Sequence[Tuple[int, int, int]],
-        inventories: Sequence[Sequence[Tuple[str, int]]],
-        bounds: Tuple[int, int, int, int, int, int],
-    ) -> None:
+    def _build_single_storage_placement_context(self) -> Dict[str, object]:
         container = self._get_selected_container()
         entity_name = self._get_storage_entity_name()
-        chunk_cache = {}
         block_cache: Dict[str, Block] = {}
 
         if container == self.CONTAINER_SHULKER:
@@ -3294,32 +3486,54 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         else:
             shulker_color = "default"
 
-        def get_storage_block(facing: str) -> Block:
-            if facing in block_cache:
-                return block_cache[facing]
+        return {
+            "container": container,
+            "entity_name": entity_name,
+            "shulker_color": shulker_color,
+            "block_cache": block_cache,
+        }
 
-            if container == self.CONTAINER_BARREL:
-                block = self._make_universal_barrel(facing=facing)
-            elif container == self.CONTAINER_SHULKER:
-                block = Block(
-                    "universal_minecraft",
-                    "shulker_box",
-                    {
-                        "color": self._universal_string(shulker_color),
-                        "facing": self._universal_string(facing),
-                    },
-                )
-            else:
-                block = self._make_universal_chest(facing=facing, connection="none")
+    def _get_cached_single_storage_block(self, placement_context: Dict[str, object], facing: str) -> Block:
+        block_cache = placement_context["block_cache"]
 
-            block_cache[facing] = block
-            return block
+        if facing in block_cache:
+            return block_cache[facing]
+
+        container = placement_context["container"]
+
+        if container == self.CONTAINER_BARREL:
+            block = self._make_universal_barrel(facing=facing)
+        elif container == self.CONTAINER_SHULKER:
+            block = Block(
+                "universal_minecraft",
+                "shulker_box",
+                {
+                    "color": self._universal_string(str(placement_context["shulker_color"])),
+                    "facing": self._universal_string(facing),
+                },
+            )
+        else:
+            block = self._make_universal_chest(facing=facing, connection="none")
+
+        block_cache[facing] = block
+        return block
+
+    def _place_single_storage_in_chunks(
+        self,
+        positions: Sequence[Tuple[int, int, int]],
+        inventories: Sequence[Sequence[Tuple[str, int]]],
+        bounds: Tuple[int, int, int, int, int, int],
+    ) -> None:
+        placement_context = self._build_single_storage_placement_context()
+        entity_name = str(placement_context["entity_name"])
+        item_info_cache: Dict[str, Tuple[str, int]] = {}
+        chunk_cache = {}
 
         for (x, y, z), stacks in zip(positions, inventories):
             facing = self._get_inward_facing(x, z, bounds)
-            universal_block = get_storage_block(facing)
+            universal_block = self._get_cached_single_storage_block(placement_context, facing)
 
-            nbt = self._make_inventory_nbt(stacks)
+            nbt = self._make_inventory_nbt(stacks, item_info_cache=item_info_cache)
             universal_entity = BlockEntity("universal_minecraft", entity_name, x, y, z, nbt)
 
             cx, cz = self._chunk_coords(x, z)
@@ -3344,6 +3558,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         chest_inventories: Sequence[Sequence[Tuple[str, int]]],
         bounds: Tuple[int, int, int, int, int, int],
     ) -> None:
+        item_info_cache: Dict[str, Tuple[str, int]] = {}
         chunk_cache = {}
 
         for (first_pos, second_pos, pair_axis), stacks in zip(chest_pairs, chest_inventories):
@@ -3367,11 +3582,13 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 left_half,
                 pair_position=(right_x, right_z),
                 pair_lead=True,
+                item_info_cache=item_info_cache,
             )
             right_nbt = self._make_inventory_nbt(
                 right_half,
                 pair_position=(left_x, left_z),
                 pair_lead=False,
+                item_info_cache=item_info_cache,
             )
 
             left_entity = BlockEntity("universal_minecraft", "chest", left_x, left_y, left_z, left_nbt)
@@ -3641,7 +3858,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 self._log("Shulker facing: sideways/inward")
 
             scan_start = time.perf_counter()
-            counts, skipped_counts, protected_positions, bounds, scanned_positions = self._scan_selection()
+            counts, skipped_counts, skipped_by_reason, protected_positions, bounds, scanned_positions = self._scan_selection()
             scan_time = time.perf_counter() - scan_start
 
             if not bounds:
@@ -3670,11 +3887,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             if not counts:
                 self._log("No exportable blocks found.")
 
-                if skipped_counts:
-                    self._log("")
-                    self._log("Skipped blocks:")
-                    for item_name in sorted(skipped_counts.keys()):
-                        self._log(f"{item_name} -> {skipped_counts[item_name]}")
+                self._log("")
+                self._log_skipped_block_report(skipped_counts, skipped_by_reason)
 
                 self._log("")
                 self._log(f"Total operation time: {self._format_seconds(time.perf_counter() - total_start)}")
@@ -3747,12 +3961,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 self._log(f"{item_name} -> {counts[item_name]:,}")
 
             self._log("")
-            if skipped_counts:
-                self._log("Skipped blocks:")
-                for item_name in sorted(skipped_counts.keys()):
-                    self._log(f"{item_name} -> {skipped_counts[item_name]:,}")
-            else:
-                self._log("Skipped blocks: none")
+            self._log_skipped_block_report(skipped_counts, skipped_by_reason)
 
             clear_start = time.perf_counter()
             preserved_bedrock, cleared_blocks, fast_clear_result = self._clear_selection_in_chunks(protected_positions)
