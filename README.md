@@ -21,11 +21,11 @@ This can be useful for map cleanup, spawn-proofing, build preparation, testing a
 
 ### Blocks to Storage
 
-Blocks to Storage collects blocks from a selected Minecraft Bedrock Edition world region and organizes them into supported storage containers.
+Blocks to Storage collects blocks from a selected Minecraft Bedrock Edition world region and places them into storage containers instead of permanently deleting them.
 
-It is intended for cleanup, testing worlds, large edits, resource recovery, and situations where blocks need to be collected, sorted, or stored instead of manually handled or permanently deleted.
+It can count and sort collected blocks, keep different block types separate, add item-frame labels, and pack large amounts of blocks into shulker boxes. It also handles many block variations automatically so the stored items keep the correct type, color, name, and other supported details.
 
-This can be useful when clearing large areas, preserving materials from edits, organizing block counts, or converting selected world regions into storage-friendly outputs.
+This can be useful for clearing large areas, recovering materials from world edits, organizing blocks, testing maps, or turning a selected region into a compact storage area.
 
 
 ## Screenshots
