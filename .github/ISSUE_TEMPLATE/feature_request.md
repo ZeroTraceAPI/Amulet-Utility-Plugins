@@ -8,6 +8,9 @@ assignees: ''
 ---
 
 # Feature Request
+> Complete the sections that are relevant to your suggestion. You may remove optional sections that do not apply, but please clearly explain the requested feature, why it would be useful, and how you expect it to work.
+>
+> Do not include private or sensitive information. Review screenshots, examples, and other attached files before submitting them.
 
 ## Plugin or area
 
