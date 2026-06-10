@@ -8,6 +8,9 @@ assignees: ''
 ---
 
 # Bug Report
+> Complete the sections that are relevant to the issue. You may remove optional sections that do not apply, but please keep enough information for the problem to be understood and reproduced.
+>
+> Do not include private or sensitive information. Review logs, reports, screenshots, videos, and other attached files before submitting them.
 
 ## Plugin
 
@@ -55,9 +58,27 @@ What should have happened instead?
 
 ---
 
-## Console errors or logs
+## Plugin settings and export report
 
-Paste any relevant errors here.
+List the settings related to the issue.
+
+For Blocks to Storage:
+
+* Reproduce the issue on the smallest practical selection and attach the saved export report.
+* For item-frame issues, enable `Include item frame label audit in report`.
+* Give the exact in-game coordinates of each incorrect or empty container or item frame.
+  * For an item frame, stand in the same block space as the frame when reading the coordinates, not one block in front of it.
+* Explain what the report says was placed and what actually appeared in-game.
+
+Enable other advanced diagnostics only when requested or clearly related to the issue. Remove any information you do not want to share.
+
+---
+
+## Console errors, logs, or other useful files
+
+Paste relevant console errors or logs here.
+
+Attach any useful `.BTSP` files or other diagnostic files here.
 
 ---
 
@@ -65,7 +86,7 @@ Paste any relevant errors here.
 
 (Optional)
 
-Add screenshots or a video if it helps explain the issue.
+Attach screenshots or a short video showing the issue, coordinates, or incorrect in-game result.
 
 ---
 
