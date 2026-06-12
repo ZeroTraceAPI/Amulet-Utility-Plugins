@@ -238,6 +238,12 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:bars",
         "minecraft:stonecutter_old",
         "minecraft:stonecutter_block",
+        "minecraft:button",
+        "minecraft:pressure_plate",
+        "minecraft:trapdoor",
+        "minecraft:fence_gate",
+        "minecraft:head",
+        "minecraft:wall_head",
     }
 
     # These ambiguous scan names are still safe to use as item frame labels.
@@ -294,6 +300,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:crimson_hanging_sign",
         "minecraft:warped_hanging_sign",
         "minecraft:stonecutter_block",
+        "minecraft:fence_gate",
+        "minecraft:trapdoor",
     }
 
     # State-sensitive blocks are re-read with the safer Amulet lookup so the
@@ -382,6 +390,18 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:black_candle",
         "minecraft:bars",
         "minecraft:glazed_terracotta",
+        "minecraft:wool",
+        "minecraft:concrete",
+        "minecraft:concrete_powder",
+        "minecraft:stained_glass",
+        "minecraft:stained_glass_pane",
+        "minecraft:coral_block",
+        "minecraft:button",
+        "minecraft:pressure_plate",
+        "minecraft:trapdoor",
+        "minecraft:fence_gate",
+        "minecraft:head",
+        "minecraft:wall_head",
     }
 
     # Generic fallback names that should not be written directly as items.
@@ -442,6 +462,14 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:melon_stem": "minecraft:melon_seeds",
         "minecraft:attached_melon_stem": "minecraft:melon_seeds",
         "minecraft:kelp_plant": "minecraft:kelp",
+        "minecraft:tripwire": "minecraft:string",
+        "minecraft:cave_vines": "minecraft:glow_berries",
+        "minecraft:cave_vines_plant": "minecraft:glow_berries",
+        "minecraft:weeping_vines_plant": "minecraft:weeping_vines",
+        "minecraft:jack_o_lantern": "minecraft:lit_pumpkin",
+        "minecraft:end_stone_bricks": "minecraft:end_bricks",
+        "minecraft:powered_rail": "minecraft:golden_rail",
+        "minecraft:rooted_dirt": "minecraft:dirt_with_roots",
         "minecraft:waxed_copper_block": "minecraft:waxed_copper",
         "minecraft:light_gray_glazed_terracotta": "minecraft:silver_glazed_terracotta",
         "minecraft:wall_sign": "minecraft:sign",
@@ -566,6 +594,38 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         f"minecraft:{color_name}_bed": color_name for color_name in BED_COLOR_NAMES
     }
 
+    CARPET_COLOR_BY_ITEM_NAME = {
+        f"minecraft:{color_name}_carpet": color_name for color_name in BED_COLOR_NAMES
+    }
+
+    WOOL_ITEM_BY_COLOR = {
+        color_name: f"minecraft:{color_name}_wool" for color_name in BED_COLOR_NAMES
+    }
+
+    CONCRETE_ITEM_BY_COLOR = {
+        color_name: f"minecraft:{color_name}_concrete" for color_name in BED_COLOR_NAMES
+    }
+
+    CONCRETE_POWDER_ITEM_BY_COLOR = {
+        color_name: f"minecraft:{color_name}_concrete_powder" for color_name in BED_COLOR_NAMES
+    }
+
+    STAINED_GLASS_ITEM_BY_COLOR = {
+        color_name: f"minecraft:{color_name}_stained_glass" for color_name in BED_COLOR_NAMES
+    }
+
+    STAINED_GLASS_PANE_ITEM_BY_COLOR = {
+        color_name: f"minecraft:{color_name}_stained_glass_pane" for color_name in BED_COLOR_NAMES
+    }
+
+    CORAL_BLOCK_TYPES = {
+        "tube",
+        "brain",
+        "bubble",
+        "fire",
+        "horn",
+    }
+
     TERRACOTTA_ITEM_BY_COLOR = {
         color_name: f"minecraft:{color_name}_terracotta" for color_name in BED_COLOR_NAMES
     }
@@ -620,6 +680,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "bamboo": "minecraft:bamboo_sign",
         "crimson": "minecraft:crimson_sign",
         "warped": "minecraft:warped_sign",
+        "pale_oak": "minecraft:pale_oak_sign",
     }
 
     HANGING_SIGN_ITEM_BY_TYPE = {
@@ -635,6 +696,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "bamboo": "minecraft:bamboo_hanging_sign",
         "crimson": "minecraft:crimson_hanging_sign",
         "warped": "minecraft:warped_hanging_sign",
+        "pale_oak": "minecraft:pale_oak_hanging_sign",
     }
 
     BARS_ITEM_BY_TYPE = {
@@ -703,6 +765,14 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:undyed_shulker_box": "shulker_box",
         "minecraft:normal_stone_slab": "stone_slab",
         "minecraft:normal_stone_double_slab": "stone_double_slab",
+        "minecraft:fence_gate": "oak_fence_gate",
+        "minecraft:trapdoor": "oak_trapdoor",
+        "minecraft:string": "string",
+        "minecraft:glow_berries": "glow_berries",
+        "minecraft:lit_pumpkin": "jack_o_lantern",
+        "minecraft:end_bricks": "end_stone_bricks",
+        "minecraft:golden_rail": "powered_rail",
+        "minecraft:dirt_with_roots": "rooted_dirt",
     }
 
     # Some inventory items use one Bedrock item name plus a damage value instead
@@ -761,6 +831,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:black_candle",
         "minecraft:frame",
         "minecraft:glow_frame",
+        "minecraft:carpet",
     }
 
     NON_STACKABLE_ITEMS = {
@@ -794,6 +865,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     KNOWN_UNSAFE_ITEM_BLOCKS = {
         "minecraft:piston_head",
         "minecraft:sticky_piston_head",
+        "minecraft:sticky_piston_arm_collision",
         "minecraft:piston_arm_collision",
         "minecraft:moving_piston",
         "minecraft:moving_block",
@@ -827,6 +899,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:infested_block",
         "minecraft:bubble_column",
         "minecraft:sticky_piston_head",
+        "minecraft:sticky_piston_arm_collision",
         "minecraft:piston_arm_collision",
         "minecraft:moving_block",
         "minecraft:structure_block",
@@ -892,6 +965,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         title = wx.StaticText(self.settings_panel, label="Blocks to Storage")
         self.settings_sizer.Add(title, 0, wx.ALL, 6)
 
+        # Storage settings decide where the collected block items are written.
         self._add_settings_section("Storage settings")
 
         container_row = wx.BoxSizer(wx.HORIZONTAL)
@@ -937,6 +1011,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         stack_row.Add(self.stack_height, 0)
         self.settings_sizer.Add(stack_row, 0, wx.ALL, 6)
 
+        # Export behavior controls what gets collected and how groups are ordered.
         self._add_settings_section("Export behavior")
 
         self.include_unusual = wx.CheckBox(self.settings_panel, label="Include unusual blocks")
@@ -951,6 +1026,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self.alphabetical_order.SetValue(True)
         self.settings_sizer.Add(self.alphabetical_order, 0, wx.ALL, 6)
 
+        # Separated groups keep each item type in its own labeled storage area.
         self._add_settings_section("Separated groups")
 
         self.separate_types = wx.CheckBox(self.settings_panel, label="One block type per storage group")
@@ -975,6 +1051,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         group_spacing_row.Add(self.group_spacing, 0)
         self.settings_sizer.Add(group_spacing_row, 0, wx.ALL, 6)
 
+        # Nested shulker storage packs item groups into shulker-box items first.
         self._add_settings_section("Nested shulker storage")
 
         self.use_nested_shulker_storage = wx.CheckBox(self.settings_panel, label="Pack into shulker boxes inside storage")
@@ -1004,6 +1081,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self.nested_shulker_color_row.Add(self.nested_shulker_color_choice, 1)
         self.settings_sizer.Add(self.nested_shulker_color_row, 0, wx.ALL | wx.EXPAND, 6)
 
+        # Performance and safety options affect scan / clear speed and user confirmation.
         self._add_settings_section("Performance and safety")
 
         self.fast_direct_scan = wx.CheckBox(self.settings_panel, label="Fast direct chunk scan")
@@ -1018,11 +1096,19 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self.show_large_selection_warning.SetValue(True)
         self.settings_sizer.Add(self.show_large_selection_warning, 0, wx.ALL, 6)
 
+        self.include_item_frame_audit = wx.CheckBox(
+            self.settings_panel,
+            label="Include item frame label audit in report",
+        )
+        self.include_item_frame_audit.SetValue(False)
+        self.settings_sizer.Add(self.include_item_frame_audit, 0, wx.ALL, 6)
+
         self._sizer.Add(self.settings_panel, 0, wx.ALL | wx.EXPAND, 0)
 
-        self.test = wx.Button(self, label="Delete Blocks to Storage")
-        self.test.Bind(wx.EVT_BUTTON, self._run_export)
-        self._sizer.Add(self.test, 0, wx.ALL | wx.EXPAND, 6)
+        # Main action button for running the export operation.
+        self.run_export_button = wx.Button(self, label="Delete Blocks to Storage")
+        self.run_export_button.Bind(wx.EVT_BUTTON, self._run_export)
+        self._sizer.Add(self.run_export_button, 0, wx.ALL | wx.EXPAND, 6)
 
         self.save_report_button = wx.Button(self, label="Save Last Report...")
         self.save_report_button.Bind(wx.EVT_BUTTON, self._save_last_report)
@@ -1087,6 +1173,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             "Shows a confirmation popup before running on selections estimated at 500,000 blocks or more.",
         )
         self._set_tooltip(
+            self.include_item_frame_audit,
+            "Adds a detailed item-frame label audit to the export report. The audit includes internal item keys, final Bedrock item names, damage values, storage coordinates, frame coordinates, and Block-tag usage. Leave this disabled for normal reports.",
+        )
+        self._set_tooltip(
             self.separate_types,
             "Keeps each block type in its own storage group. Example: stone goes into its own containers, dirt goes into its own containers, and so on.",
         )
@@ -1131,7 +1221,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             "Choose the color of the generated shulker boxes used inside storage containers. Default creates normal undyed shulker boxes.",
         )
         self._set_tooltip(
-            self.test,
+            self.run_export_button,
             "Scans the selected area, counts exportable blocks, clears the selected blocks, and places the collected blocks into the chosen storage type.",
         )
         self._set_tooltip(
@@ -1209,6 +1299,42 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         self.settings_sizer.Add(section_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 6)
 
+    def _needs_safe_block_lookup(self, item_name: Optional[str]) -> bool:
+        """
+        Returns whether a fast-scan name should be re-read through Amulet.
+
+        Imported Java structures, universal blocks and legacy Bedrock palettes
+        can expose generic placed-block names even when Amulet can translate the
+        block more precisely. This helper keeps those checks in one place.
+        """
+        if not item_name:
+            return False
+
+        item_name = str(item_name)
+        if item_name in self.STATE_SENSITIVE_SCAN_BLOCKS:
+            return True
+        if item_name in self.AMBIGUOUS_FAST_SCAN_BLOCKS:
+            return True
+
+        return item_name.endswith(
+            (
+                "_door",
+                "_sign",
+                "_hanging_sign",
+                "_banner",
+                "_candle_cake",
+                "_bars",
+                "_button",
+                "_pressure_plate",
+                "_trapdoor",
+                "_fence_gate",
+                "_head",
+            )
+        ) or (
+            item_name.endswith("_candle")
+            and not item_name.endswith("_candle_cake")
+        )
+
     def _get_selected_container(self) -> str:
         """
         Returns the selected storage container type, defaulting to chest if the UI has no value.
@@ -1235,6 +1361,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         Refreshes option visibility when nested shulker storage is enabled or disabled.
         """
         self._update_option_visibility()
+
 
     def _on_panel_resized(self, event) -> None:
         """
@@ -2038,6 +2165,79 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return None
 
+    def _get_colored_variant_item_name(
+        self,
+        block,
+        item_by_color: Dict[str, str],
+        block_entity=None,
+    ) -> Optional[str]:
+        """
+        Converts a generic color-state block into its color-specific Bedrock item name.
+        """
+        color_name = self._get_block_color_name(block, block_entity)
+
+        if color_name is None:
+            return None
+
+        return item_by_color.get(color_name)
+
+    def _get_coral_block_item_name(self, block, key: str) -> Optional[str]:
+        """
+        Converts generic coral block data into the matching live or dead Bedrock item name.
+        """
+        key_text = str(key).strip().lower()
+        if key_text.startswith("minecraft:"):
+            key_text = key_text.split(":", 1)[1]
+
+        is_dead = key_text.startswith("dead_")
+        coral_type = None
+
+        for candidate in self.CORAL_BLOCK_TYPES:
+            if candidate in key_text:
+                coral_type = candidate
+                break
+
+        if coral_type is None:
+            raw_type = self._get_block_property(
+                block,
+                (
+                    "coral_color",
+                    "coral_type",
+                    "coral",
+                    "type",
+                    "color",
+                    "colour",
+                ),
+            )
+
+            if raw_type is not None:
+                type_text = str(raw_type).strip().lower()
+                if type_text.startswith("minecraft:"):
+                    type_text = type_text.split(":", 1)[1]
+                type_text = type_text.replace(" ", "_").replace("-", "_")
+
+                for candidate in self.CORAL_BLOCK_TYPES:
+                    if candidate in type_text:
+                        coral_type = candidate
+                        break
+
+        dead_value = self._get_block_property(
+            block,
+            (
+                "dead_bit",
+                "dead",
+                "is_dead",
+            ),
+        )
+        if self._is_truthy_state_value(dead_value):
+            is_dead = True
+
+        if coral_type is None:
+            return None
+
+        prefix = "dead_" if is_dead else ""
+        return f"minecraft:{prefix}{coral_type}_coral_block"
+
     def _get_stained_terracotta_item_name(self, block, block_entity=None) -> Optional[str]:
         """
         Converts generic stained terracotta into its colored inventory item name.
@@ -2214,6 +2414,15 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         )
         sign_type = self._normalize_state_text(sign_type)
 
+        # Imported Java / universal structures and older Bedrock palettes may
+        # expose compact wood-family spellings. Normalize only verified aliases
+        # before resolving the inventory sign item.
+        sign_type_aliases = {
+            "darkoak": "dark_oak",
+            "paleoak": "pale_oak",
+        }
+        sign_type = sign_type_aliases.get(sign_type, sign_type)
+
         if not sign_type or sign_type in ("standing", "wall", "hanging", "sign"):
             sign_type = self._normalize_state_text(block_key)
 
@@ -2238,6 +2447,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         if sign_type.endswith("_sign"):
             sign_type = sign_type[:-5]
 
+        sign_type = sign_type_aliases.get(sign_type, sign_type)
         return sign_type
 
     def _get_sign_item_name(self, block) -> Optional[str]:
@@ -2405,6 +2615,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             color_name = self.BED_COLOR_BY_ITEM_NAME[item_name]
             return "minecraft:bed", self.BED_ITEM_DAMAGE_BY_COLOR.get(color_name, 0)
 
+        if item_name in self.CARPET_COLOR_BY_ITEM_NAME:
+            color_name = self.CARPET_COLOR_BY_ITEM_NAME[item_name]
+            return "minecraft:carpet", self.BED_ITEM_DAMAGE_BY_COLOR.get(color_name, 0)
+
         return item_name, 0
 
     def _get_cached_item_nbt_name_damage(
@@ -2486,6 +2700,61 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             bed_color = self._get_bed_color_name(block, block_entity)
             if bed_color:
                 key = f"minecraft:{bed_color}_bed"
+
+        if key == "minecraft:carpet":
+            carpet_color = self._get_block_color_name(block, block_entity)
+            if carpet_color:
+                key = f"minecraft:{carpet_color}_carpet"
+
+        if key == "minecraft:wool":
+            wool_item = self._get_colored_variant_item_name(
+                block,
+                self.WOOL_ITEM_BY_COLOR,
+                block_entity,
+            )
+            if wool_item:
+                key = wool_item
+
+        if key == "minecraft:concrete":
+            concrete_item = self._get_colored_variant_item_name(
+                block,
+                self.CONCRETE_ITEM_BY_COLOR,
+                block_entity,
+            )
+            if concrete_item:
+                key = concrete_item
+
+        if key == "minecraft:concrete_powder":
+            concrete_powder_item = self._get_colored_variant_item_name(
+                block,
+                self.CONCRETE_POWDER_ITEM_BY_COLOR,
+                block_entity,
+            )
+            if concrete_powder_item:
+                key = concrete_powder_item
+
+        if key == "minecraft:stained_glass":
+            stained_glass_item = self._get_colored_variant_item_name(
+                block,
+                self.STAINED_GLASS_ITEM_BY_COLOR,
+                block_entity,
+            )
+            if stained_glass_item:
+                key = stained_glass_item
+
+        if key == "minecraft:stained_glass_pane":
+            stained_glass_pane_item = self._get_colored_variant_item_name(
+                block,
+                self.STAINED_GLASS_PANE_ITEM_BY_COLOR,
+                block_entity,
+            )
+            if stained_glass_pane_item:
+                key = stained_glass_pane_item
+
+        if key == "minecraft:coral_block" or key.endswith("_coral_block"):
+            coral_block_item = self._get_coral_block_item_name(block, key)
+            if coral_block_item:
+                key = coral_block_item
 
         if key == "minecraft:stained_terracotta":
             terracotta_item = self._get_stained_terracotta_item_name(block, block_entity)
@@ -3351,17 +3620,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             raw_scan_key = self._get_namespaced_block_name(block)
             export_key, skipped_key = self._classify_block(block)
 
-            raw_scan_needs_safe_lookup = (
-                raw_scan_key in self.STATE_SENSITIVE_SCAN_BLOCKS
-                or raw_scan_key in self.AMBIGUOUS_FAST_SCAN_BLOCKS
-                or str(raw_scan_key).endswith("_door")
-                or str(raw_scan_key).endswith("_sign")
-                or str(raw_scan_key).endswith("_hanging_sign")
-                or str(raw_scan_key).endswith("_banner")
-                or str(raw_scan_key).endswith("_candle_cake")
-                or (str(raw_scan_key).endswith("_candle") and not str(raw_scan_key).endswith("_candle_cake"))
-                or str(raw_scan_key).endswith("_bars")
-            )
+            raw_scan_needs_safe_lookup = self._needs_safe_block_lookup(raw_scan_key)
             ambiguous_lookup_needed = (
                 export_key in self.AMBIGUOUS_FAST_SCAN_BLOCKS
                 or raw_scan_key in self.AMBIGUOUS_FAST_SCAN_BLOCKS
@@ -3369,22 +3628,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             needs_safe_lookup = (
                 raw_scan_needs_safe_lookup
                 or ambiguous_lookup_needed
-                or export_key in self.STATE_SENSITIVE_SCAN_BLOCKS
-                or skipped_key in self.STATE_SENSITIVE_SCAN_BLOCKS
-                or str(export_key).endswith("_door")
-                or str(skipped_key).endswith("_door")
-                or str(export_key).endswith("_sign")
-                or str(skipped_key).endswith("_sign")
-                or str(export_key).endswith("_hanging_sign")
-                or str(skipped_key).endswith("_hanging_sign")
-                or str(export_key).endswith("_banner")
-                or str(skipped_key).endswith("_banner")
-                or str(export_key).endswith("_candle_cake")
-                or str(skipped_key).endswith("_candle_cake")
-                or (str(export_key).endswith("_candle") and not str(export_key).endswith("_candle_cake"))
-                or (str(skipped_key).endswith("_candle") and not str(skipped_key).endswith("_candle_cake"))
-                or str(export_key).endswith("_bars")
-                or str(skipped_key).endswith("_bars")
+                or self._needs_safe_block_lookup(export_key)
+                or self._needs_safe_block_lookup(skipped_key)
             )
 
             if needs_safe_lookup:
@@ -4258,25 +4503,51 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         use_double_chests: bool,
         bounds: Tuple[int, int, int, int, int, int],
         protected_positions: Set[Tuple[int, int, int]],
-    ) -> Tuple[int, int]:
+    ) -> Tuple[
+        int,
+        int,
+        Dict[str, Dict[str, int]],
+        List[Tuple[str, str, int, Tuple[int, int, int], Tuple[int, int, int], bool]],
+    ]:
         """
         Places one item frame at the first storage unit of each separated block type group.
+
+        Returns placed and skipped totals, skipped label details grouped by
+        reason, and a successful label audit. The audit records the internal
+        group key, final Bedrock item name, damage value, storage position,
+        frame position and whether a Block tag was written.
         """
         if not self.separate_types.GetValue():
-            return 0, 0
+            return 0, 0, {}, []
 
         if not self.add_group_item_frames.GetValue():
-            return 0, 0
+            return 0, 0, {}, []
 
         chunk_cache = {}
         storage_occupied_positions = self._collect_storage_occupied_positions(use_double_chests, storage_positions)
 
         placed_frames = 0
         skipped_frames = 0
+        skipped_details: Dict[str, Dict[str, int]] = collections.defaultdict(
+            lambda: collections.defaultdict(int)
+        )
+        label_audit: List[
+            Tuple[str, str, int, Tuple[int, int, int], Tuple[int, int, int], bool]
+        ] = []
+
+        def record_skip(item_name: str, reason: str) -> None:
+            nonlocal skipped_frames
+            skipped_frames += 1
+            safe_name = str(item_name).strip() or "<empty item name>"
+            skipped_details[reason][safe_name] += 1
 
         for item_name, storage_index in group_starts:
-            if not str(item_name).strip() or not self._is_safe_item_key(item_name):
-                skipped_frames += 1
+            if not str(item_name).strip():
+                record_skip(item_name, "Missing or empty item name")
+                continue
+
+            if not self._is_safe_item_key(item_name):
+                record_skip(item_name, "Unsafe or unsupported item key")
                 continue
 
             try:
@@ -4299,20 +4570,23 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 frame_x, frame_y, frame_z = self._get_front_position(x, y, z, facing)
 
                 if not self._is_position_inside_bounds(frame_x, frame_y, frame_z, bounds):
-                    skipped_frames += 1
+                    record_skip(item_name, "Frame position outside selection bounds")
                     continue
 
                 if self._is_protected_position(frame_x, frame_y, frame_z, protected_positions):
-                    skipped_frames += 1
+                    record_skip(item_name, "Frame position is protected")
                     continue
 
                 if (frame_x, frame_y, frame_z) in storage_occupied_positions:
-                    skipped_frames += 1
+                    record_skip(item_name, "Frame position overlaps generated storage")
                     continue
 
                 if item_name in self.AMBIGUOUS_FAST_SCAN_BLOCKS and item_name not in self.SAFE_AMBIGUOUS_ITEM_FRAME_BLOCKS:
-                    skipped_frames += 1
+                    record_skip(item_name, "Unsafe ambiguous item-frame label")
                     continue
+
+                actual_name, damage_value = self._get_item_nbt_name_damage(item_name)
+                writes_block_tag = self._should_write_item_block_tag(item_name)
 
                 glowing = self._is_valuable_item_for_frame(item_name)
                 frame_block = self._make_universal_item_frame_block(facing=facing, glowing=glowing)
@@ -4336,10 +4610,25 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                     frame_entity,
                 )
                 placed_frames += 1
+                label_audit.append(
+                    (
+                        str(item_name),
+                        str(actual_name),
+                        int(damage_value),
+                        (int(x), int(y), int(z)),
+                        (int(frame_x), int(frame_y), int(frame_z)),
+                        bool(writes_block_tag),
+                    )
+                )
             except Exception:
-                skipped_frames += 1
+                record_skip(item_name, "Item-frame payload or world write failed")
 
-        return placed_frames, skipped_frames
+        return (
+            placed_frames,
+            skipped_frames,
+            {reason: dict(items) for reason, items in skipped_details.items()},
+            label_audit,
+        )
 
     # ---------------------------------------------------------------------
     # Button / Amulet operation wrapper
@@ -4394,6 +4683,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             self._log(f"Fast direct chunk scan: {self.fast_direct_scan.GetValue()}")
             self._log(f"Fast direct chunk clear: {self.fast_direct_clear.GetValue()}")
             self._log(f"Large selection warning enabled: {self.show_large_selection_warning.GetValue()}")
+            self._log(f"Item frame label audit enabled: {self.include_item_frame_audit.GetValue()}")
 
             container = self._get_selected_container()
             use_double_chests = container == self.CONTAINER_CHEST and self.use_double_chests.GetValue()
@@ -4526,7 +4816,12 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             else:
                 self._place_single_storage_in_chunks(storage_positions, inventories, bounds)
 
-            placed_item_frames, skipped_item_frames = self._place_group_item_frames(
+            (
+                placed_item_frames,
+                skipped_item_frames,
+                skipped_item_frame_details,
+                item_frame_label_audit,
+            ) = self._place_group_item_frames(
                 group_starts,
                 storage_positions,
                 use_double_chests,
@@ -4556,6 +4851,32 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 self._log(f"Placed nested shulker boxes: {nested_shulker_count:,}")
             self._log(f"Placed item frames: {placed_item_frames:,}")
             self._log(f"Skipped item frames: {skipped_item_frames:,}")
+
+            if skipped_item_frame_details:
+                self._log("Skipped item frame labels:")
+                for reason in sorted(skipped_item_frame_details.keys()):
+                    reason_items = skipped_item_frame_details[reason]
+                    reason_total = sum(reason_items.values())
+                    self._log(f"{reason}: {reason_total:,}")
+                    for item_name in sorted(reason_items.keys()):
+                        self._log(f"  {item_name} -> {reason_items[item_name]:,}")
+
+            if self.include_item_frame_audit.GetValue() and item_frame_label_audit:
+                self._log("Item frame label audit:")
+                for (
+                    item_name,
+                    actual_name,
+                    damage_value,
+                    storage_pos,
+                    frame_pos,
+                    writes_block_tag,
+                ) in item_frame_label_audit:
+                    self._log(
+                        f"  {item_name} -> {actual_name}, damage {damage_value}, "
+                        f"storage {storage_pos}, frame {frame_pos}, "
+                        f"Block tag: {writes_block_tag}"
+                    )
+
             self._log(f"Place time: {self._format_seconds(place_time)}")
             self._log(f"Placement speed: {self._format_rate(planned_physical_blocks, place_time, 'storage blocks')}")
 
