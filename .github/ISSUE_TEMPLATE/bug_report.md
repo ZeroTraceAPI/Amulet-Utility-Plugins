@@ -20,6 +20,7 @@ Examples:
 
 * Auto Light
 * Blocks to Storage
+* Dark Mode UI
 * Other / Not sure
 
 ---
@@ -69,6 +70,8 @@ For Blocks to Storage:
 * Give the exact in-game coordinates of each incorrect or empty container or item frame.
   * For an item frame, stand in the same block space as the frame when reading the coordinates, not one block in front of it.
 * Explain what the report says was placed and what actually appeared in-game.
+
+For Dark Mode UI, include the Status or Scan UI log when the issue is about missing or incorrect UI styling.
 
 Enable other advanced diagnostics only when requested or clearly related to the issue. Remove any information you do not want to share.
 
