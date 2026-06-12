@@ -38,19 +38,15 @@ This can be useful for long editing sessions, low-light environments, screenshot
 
 ## Screenshots
 
-Preview screenshots are available in the `Media` folder.
+Preview screenshots are available in the [`Media`](Media) folder.
 
-### Auto Light
+Plugin screenshot folders:
 
-![Auto Light screenshot](Media/Auto-Light/AL-S1.jpg)
+* Auto Light: [`Media/Auto-Light`](Media/Auto-Light)
+* Blocks to Storage: [`Media/Blocks-to-Storage`](Media/Blocks-to-Storage)
+* Dark Mode UI: [`Media/Dark-Mode-UI`](Media/Dark-Mode-UI)
 
-More screenshots: [`Media/Auto-Light`](Media/Auto-Light)
-
-### Blocks to Storage
-
-![Blocks to Storage screenshot](Media/Blocks-to-Storage/BtS-S2.jpg)
-
-More screenshots: [`Media/Blocks-to-Storage`](Media/Blocks-to-Storage)
+![Amulet Utility Plugins preview](Media/Misc/Cover_1.png)
 
 ## Installation (Windows)
 
