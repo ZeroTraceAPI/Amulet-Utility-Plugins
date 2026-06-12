@@ -20,6 +20,7 @@ Examples:
 
 * Auto Light
 * Blocks to Storage
+* Dark Mode UI
 * New plugin idea
 * General repo / documentation
 * Other / Not sure
