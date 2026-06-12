@@ -32,6 +32,7 @@ Check all that apply:
 
 - [ ] Auto Light
 - [ ] Blocks to Storage
+- [ ] Dark Mode UI
 - [ ] Documentation
 - [ ] GitHub templates / repository setup
 - [ ] Other
