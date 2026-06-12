@@ -27,6 +27,14 @@ It can count and sort collected blocks, keep different block types separate, add
 
 This can be useful for clearing large areas, recovering materials from world edits, organizing blocks, testing maps, or turning a selected region into a compact storage area.
 
+### Dark Mode UI
+
+Dark Mode UI applies a reversible dark theme to Amulet's wxPython interface after the 3d editor or plugin system loads.
+
+It keeps a persistent controller attached to the Amulet window, can re-theme newly shown panels and includes buttons to open or delete the plugin config file.
+
+This can be useful for long editing sessions, low-light environments, screenshots, or users who prefer a darker interface. The plugin changes UI colors only and does not edit the world.
+
 
 ## Screenshots
 
@@ -55,6 +63,11 @@ More screenshots: [`Media/Blocks-to-Storage`](Media/Blocks-to-Storage)
 4. Open the Operations tab and refresh the plugins if needed.
 
 Create the folders manually if needed.
+
+
+## Compatibility Notes
+
+These plugins are currently tested on Windows. They may work on other operating systems, but Windows is the supported environment for now.
 
 
 ## Cost
