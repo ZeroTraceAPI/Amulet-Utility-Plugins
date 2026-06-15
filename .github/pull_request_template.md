@@ -31,6 +31,7 @@ Check all that apply:
 Check all that apply:
 
 - [ ] Auto Light
+- [ ] Auto Farmland
 - [ ] Blocks to Storage
 - [ ] Dark Mode UI
 - [ ] Documentation
@@ -59,8 +60,8 @@ For plugin changes, check the relevant items:
 - [ ] The plugin loaded successfully in Amulet.
 - [ ] The changed settings or behavior were tested.
 - [ ] Normal default behavior was retested.
-- [ ] The export report was reviewed, when applicable.
-- [ ] In-game output was checked for conversion, storage, NBT, or item-frame changes, when applicable.
+- [ ] The operation or export report was reviewed, when applicable.
+- [ ] In-game output was checked for farm placement, conversion, storage, NBT, or item-frame changes, when applicable.
 
 Leave boxes unchecked when they do not apply, and explain any testing that could not be completed.
 
@@ -80,4 +81,4 @@ By submitting this pull request, I confirm that:
 
 ## Additional notes
 
-Add any extra context, screenshots, before/after examples, limitations, or concerns here.
+Add any extra context, screenshots, before / after examples, limitations, or concerns here.
