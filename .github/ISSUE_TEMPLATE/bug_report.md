@@ -19,6 +19,7 @@ Which plugin has the issue?
 Examples:
 
 * Auto Light
+* Auto Farmland
 * Blocks to Storage
 * Dark Mode UI
 * Other / Not sure
@@ -59,9 +60,16 @@ What should have happened instead?
 
 ---
 
-## Plugin settings and export report
+## Plugin settings and report
 
 List the settings related to the issue.
+
+For Auto Farmland:
+
+* Reproduce the issue on the smallest practical selection and attach the saved operation report.
+* Include the affected coordinates or selection dimensions.
+* List the crop layout, row direction, irrigation, water cover and slab settings that are relevant to the issue.
+* Explain what the report says was created and what actually appeared in-game.
 
 For Blocks to Storage:
 
