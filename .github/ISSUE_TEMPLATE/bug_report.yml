@@ -21,6 +21,7 @@ body:
       description: Which plugin has the issue?
       options:
         - Auto Light
+        - Auto Farmland
         - Blocks to Storage
         - Dark Mode UI
         - Other / Not sure
@@ -110,9 +111,11 @@ body:
 
   - type: textarea
     attributes:
-      label: Plugin settings and export report
+      label: Plugin settings and report
       description: |
         List the settings related to the issue.
+
+        For Auto Farmland, reproduce the issue on the smallest practical selection and attach the saved operation report. Include the affected coordinates or selection dimensions, and list the relevant crop layout, row direction, irrigation, water cover and slab settings. Explain what the report says was created and what actually appeared in-game.
 
         For Blocks to Storage, reproduce the issue on the smallest practical selection and attach the saved export report.
 
