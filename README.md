@@ -19,6 +19,14 @@ It is intended to reduce the amount of manual lighting work needed in caves, bui
 
 This can be useful for map cleanup, spawn-proofing, build preparation, testing areas, or quickly improving lighting across larger selected regions.
 
+### Auto Farmland (Coming Soon)
+
+Auto Farmland converts eligible exposed terrain in a selected Minecraft Bedrock Edition region into farmland and can plant crops automatically.
+
+It supports farmland-only operations, single crops, alternating crop rows, assorted crop patterns, melon and pumpkin stem layouts, fixed or randomized growth states, and selection-aware row direction. It can also detect existing hydration, add safe water sources, and cover new water with one of 61 selectable waterlogged upper slabs.
+
+This can be useful for creating or expanding farms, preparing large crop fields, testing layouts, restoring farmland, or reducing repetitive tilling, planting, and irrigation work.
+
 ### Blocks to Storage
 
 Blocks to Storage collects blocks from a selected Minecraft Bedrock Edition world region and places them into storage containers instead of permanently deleting them.
@@ -43,6 +51,7 @@ Preview screenshots are available in the [`Media`](Media) folder.
 Plugin screenshot folders:
 
 * Auto Light: [`Media/Auto-Light`](Media/Auto-Light)
+* Auto Farmland: [`Media/Auto-Farmland`](Media/Auto-Farmland)
 * Blocks to Storage: [`Media/Blocks-to-Storage`](Media/Blocks-to-Storage)
 * Dark Mode UI: [`Media/Dark-Mode-UI`](Media/Dark-Mode-UI)
 
