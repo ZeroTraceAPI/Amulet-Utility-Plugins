@@ -22,8 +22,11 @@ Navigation:
 11. Main Amulet operation wrapper"""
 
 import collections
+import os
 import re
+import tempfile
 import time
+from pathlib import Path
 from datetime import datetime
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple, Set
 
@@ -81,6 +84,18 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     SETTINGS_PANEL_MIN_HEIGHT = 360
     SETTINGS_PANEL_DEFAULT_HEIGHT = 440
     SETTINGS_PANEL_MAX_HEIGHT = 620
+
+    FOUND_ENTRIES_FILENAME = "Found Entries.BTSP"
+    DEFAULT_MINECRAFT_LANGUAGE_RELATIVE_PATH = Path(
+        "XboxGames",
+        "Minecraft for Windows",
+        "Content",
+        "data",
+        "resource_packs",
+        "vanilla",
+        "texts",
+        "en_US.lang",
+    )
 
     # User-facing storage choices shown in the dropdown.
     CONTAINER_CHEST = "Chest"
@@ -2774,6 +2789,27 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._fast_clear_fail_reason = ""
         self._ambiguous_fast_scan_fallbacks = 0
 
+        # External display-name data is loaded lazily and only when the user
+        # enables the installed-language fallback.
+        self._external_language_aliases: Dict[str, Tuple[str, str]] = {}
+        self._external_language_raw_entries: Dict[str, str] = {}
+        self._found_entries_aliases: Dict[str, Tuple[str, str]] = {}
+        self._found_entries_raw_entries: Dict[str, str] = {}
+        self._external_language_loaded_path = ""
+        self._external_language_loaded_mtime = None
+        self._external_language_load_error = ""
+        self._external_language_loaded_count = 0
+        self._external_language_used: Dict[str, Tuple[str, str, str]] = {}
+        self._found_entries_used: Dict[str, Tuple[str, str, str]] = {}
+        self._pending_found_entries: Dict[str, str] = {}
+        self._found_entries_write_error = ""
+        self._found_entries_written_count = 0
+        self._external_language_prepared = False
+        self._display_name_resolution_cache: Dict[
+            str,
+            Optional[Tuple[str, str, str]],
+        ] = {}
+
         self._configure_tooltips()
 
         self._sizer = wx.BoxSizer(wx.VERTICAL)
@@ -2920,6 +2956,152 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self.show_large_selection_warning.SetValue(True)
         self.settings_sizer.Add(self.show_large_selection_warning, 0, wx.ALL, 6)
 
+        # Optional display-name data can fill unresolved ABC names from the
+        # installed Minecraft Bedrock Edition language file.
+        self._add_settings_section("Display-name data")
+
+        self.use_found_entries_cache = wx.CheckBox(
+            self.settings_panel,
+            label=f"Use plugin-created {self.FOUND_ENTRIES_FILENAME} cache",
+        )
+        self.use_found_entries_cache.SetValue(True)
+        self.use_found_entries_cache.Bind(
+            wx.EVT_CHECKBOX,
+            self._on_display_name_dependency_changed,
+        )
+        self.settings_sizer.Add(
+            self.use_found_entries_cache,
+            0,
+            wx.ALL,
+            6,
+        )
+
+        self.use_installed_language_data = wx.CheckBox(
+            self.settings_panel,
+            label="Use installed Minecraft en_US.lang as fallback",
+        )
+        self.use_installed_language_data.SetValue(False)
+        self.use_installed_language_data.Bind(
+            wx.EVT_CHECKBOX,
+            self._on_installed_language_data_changed,
+        )
+        self.settings_sizer.Add(self.use_installed_language_data, 0, wx.ALL, 6)
+
+        self.auto_detect_language_file = wx.CheckBox(
+            self.settings_panel,
+            label="Automatically detect the Minecraft language file",
+        )
+        self.auto_detect_language_file.SetValue(False)
+        self.auto_detect_language_file.Bind(
+            wx.EVT_CHECKBOX,
+            self._on_auto_detect_language_file_changed,
+        )
+        self.settings_sizer.Add(self.auto_detect_language_file, 0, wx.ALL, 6)
+
+        self.language_file_row = wx.BoxSizer(wx.HORIZONTAL)
+        self.language_file_label = wx.StaticText(
+            self.settings_panel,
+            label="Language file",
+        )
+        self.language_file_path = wx.TextCtrl(
+            self.settings_panel,
+            value=str(
+                Path("C:/") / self.DEFAULT_MINECRAFT_LANGUAGE_RELATIVE_PATH
+            ),
+        )
+        self.browse_language_file_button = wx.Button(
+            self.settings_panel,
+            label="Browse...",
+        )
+        self.browse_language_file_button.Bind(
+            wx.EVT_BUTTON,
+            self._browse_for_language_file,
+        )
+        self.language_file_row.Add(
+            self.language_file_label,
+            0,
+            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
+            8,
+        )
+        self.language_file_row.Add(self.language_file_path, 1, wx.RIGHT, 6)
+        self.language_file_row.Add(self.browse_language_file_button, 0)
+        self.settings_sizer.Add(
+            self.language_file_row,
+            0,
+            wx.ALL | wx.EXPAND,
+            6,
+        )
+
+        self.save_found_language_entries = wx.CheckBox(
+            self.settings_panel,
+            label=f"Save newly resolved entries to {self.FOUND_ENTRIES_FILENAME}",
+        )
+        self.save_found_language_entries.SetValue(False)
+        self.save_found_language_entries.Bind(
+            wx.EVT_CHECKBOX,
+            self._on_display_name_dependency_changed,
+        )
+        self.settings_sizer.Add(
+            self.save_found_language_entries,
+            0,
+            wx.ALL,
+            6,
+        )
+
+        self.simulate_missing_display_name = wx.CheckBox(
+            self.settings_panel,
+            label="Simulate missing embedded display-name entry",
+        )
+        self.simulate_missing_display_name.SetValue(False)
+        self.simulate_missing_display_name.Bind(
+            wx.EVT_CHECKBOX,
+            self._on_simulate_missing_display_name_changed,
+        )
+        self.settings_sizer.Add(
+            self.simulate_missing_display_name,
+            0,
+            wx.ALL,
+            6,
+        )
+
+        self.simulated_missing_alias_row = wx.BoxSizer(wx.HORIZONTAL)
+        self.simulated_missing_alias_label = wx.StaticText(
+            self.settings_panel,
+            label="Entry alias to ignore",
+        )
+        self.simulated_missing_alias = wx.TextCtrl(
+            self.settings_panel,
+            value="oak_log",
+        )
+        self.simulated_missing_alias_row.Add(
+            self.simulated_missing_alias_label,
+            0,
+            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
+            8,
+        )
+        self.simulated_missing_alias_row.Add(self.simulated_missing_alias, 1)
+        self.settings_sizer.Add(
+            self.simulated_missing_alias_row,
+            0,
+            wx.ALL | wx.EXPAND,
+            6,
+        )
+
+        self.delete_display_name_data_button = wx.Button(
+            self.settings_panel,
+            label="Delete plugin-created display-name data...",
+        )
+        self.delete_display_name_data_button.Bind(
+            wx.EVT_BUTTON,
+            self._delete_plugin_created_display_name_data,
+        )
+        self.settings_sizer.Add(
+            self.delete_display_name_data_button,
+            0,
+            wx.ALL | wx.EXPAND,
+            6,
+        )
+
         # Debug and diagnostic options add detailed report data without changing
         # block conversion, storage contents, item frames or placement behavior.
         self._add_settings_section("Debug and diagnostics")
@@ -3006,6 +3188,50 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._set_tooltip(
             self.show_large_selection_warning,
             "Shows a confirmation popup before running on selections estimated at 500,000 blocks or more.",
+        )
+        self._set_tooltip(
+            self.use_found_entries_cache,
+            f"Uses previously saved entries from {self.FOUND_ENTRIES_FILENAME} independently of the installed Minecraft language fallback. This is on by default. If the file is missing, empty or unreadable, the plugin safely continues with embedded names without repeated checks.",
+        )
+        self._set_tooltip(
+            self.use_installed_language_data,
+            "Allows unresolved ABC display names to use a local Minecraft Bedrock Edition en_US.lang file. This is disabled by default. Embedded verified names always keep priority.",
+        )
+        self._set_tooltip(
+            self.auto_detect_language_file,
+            "When enabled, checks only known Minecraft for Windows installation locations on available drive letters. It is off by default and does not recursively search any drive.",
+        )
+        self._set_tooltip(
+            self.language_file_label,
+            "Path to the Minecraft Bedrock Edition en_US.lang file used for unresolved display names.",
+        )
+        self._set_tooltip(
+            self.language_file_path,
+            "Path to the Minecraft Bedrock Edition en_US.lang file. You may enter a path manually or use Browse.",
+        )
+        self._set_tooltip(
+            self.browse_language_file_button,
+            "Select the Minecraft Bedrock Edition en_US.lang file manually.",
+        )
+        self._set_tooltip(
+            self.save_found_language_entries,
+            f"Atomically saves newly used external display-name entries to {self.FOUND_ENTRIES_FILENAME}. Existing entries are preserved and embedded plugin data is never modified.",
+        )
+        self._set_tooltip(
+            self.delete_display_name_data_button,
+            f"Finds and deletes only plugin-created {self.FOUND_ENTRIES_FILENAME} files and the plugin-created fallback data folder when it becomes empty. A confirmation window lists every exact path before deletion. Minecraft language files, worlds, reports and the plugin are never deleted.",
+        )
+        self._set_tooltip(
+            self.simulate_missing_display_name,
+            "Testing only. Makes one item behave as though its embedded display-name entry is missing, allowing the external fallback and cache paths to be tested without editing the plugin.",
+        )
+        self._set_tooltip(
+            self.simulated_missing_alias_label,
+            "Internal item alias to ignore in the embedded table during testing, for example oak_log.",
+        )
+        self._set_tooltip(
+            self.simulated_missing_alias,
+            "Internal item alias to ignore in the embedded table during testing, for example oak_log. Only one alias is supported.",
         )
         self._set_tooltip(
             self.include_item_frame_audit,
@@ -3202,6 +3428,58 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._update_option_visibility()
 
 
+    def _on_display_name_dependency_changed(self, _) -> None:
+        """
+        Refreshes conditional controls in the Display-name data setting tree.
+        """
+        self._update_option_visibility()
+
+    def _on_installed_language_data_changed(self, _) -> None:
+        """
+        Refreshes display-name data controls when the fallback is enabled.
+        """
+        self._update_option_visibility()
+
+    def _on_auto_detect_language_file_changed(self, _) -> None:
+        """
+        Refreshes manual language-path controls when detection changes.
+        """
+        self._update_option_visibility()
+
+    def _on_simulate_missing_display_name_changed(self, _) -> None:
+        """
+        Refreshes the simulated-missing-entry field when testing is enabled.
+        """
+        self._update_option_visibility()
+
+    def _browse_for_language_file(self, _) -> None:
+        """
+        Lets the user select a Bedrock Edition en_US.lang file.
+        """
+        current_value = self.language_file_path.GetValue().strip()
+        default_directory = ""
+        default_file = "en_US.lang"
+
+        if current_value:
+            current_path = Path(current_value)
+            default_directory = str(current_path.parent)
+            default_file = current_path.name or default_file
+
+        dialog = wx.FileDialog(
+            self,
+            message="Select Minecraft Bedrock Edition en_US.lang",
+            defaultDir=default_directory,
+            defaultFile=default_file,
+            wildcard="Minecraft language files (*.lang)|*.lang|All files (*.*)|*.*",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        )
+
+        try:
+            if dialog.ShowModal() == wx.ID_OK:
+                self.language_file_path.SetValue(dialog.GetPath())
+        finally:
+            dialog.Destroy()
+
     def _on_panel_resized(self, event) -> None:
         """
         Updates the settings panel height when Amulet gives the operation panel more room.
@@ -3272,6 +3550,68 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 window = child.GetWindow()
                 if window is not None:
                     window.Show(nested_shulker_enabled)
+
+        external_language_enabled = (
+            hasattr(self, "use_installed_language_data")
+            and self.use_installed_language_data.GetValue()
+        )
+        btsp_cache_enabled = (
+            hasattr(self, "use_found_entries_cache")
+            and self.use_found_entries_cache.GetValue()
+        )
+        automatic_detection_checked = (
+            hasattr(self, "auto_detect_language_file")
+            and self.auto_detect_language_file.GetValue()
+        )
+        save_entries_checked = (
+            hasattr(self, "save_found_language_entries")
+            and self.save_found_language_entries.GetValue()
+        )
+        simulation_checked = (
+            hasattr(self, "simulate_missing_display_name")
+            and self.simulate_missing_display_name.GetValue()
+        )
+
+        # Display-name data uses a local active-child visibility rule. A checked
+        # child remains visible after its parent is disabled so the user can see
+        # and turn off the still-active setting. Once unchecked, it hides again.
+        if hasattr(self, "auto_detect_language_file"):
+            self.auto_detect_language_file.Show(
+                external_language_enabled
+                or automatic_detection_checked
+            )
+
+        if hasattr(self, "language_file_row"):
+            show_manual_language_path = (
+                external_language_enabled
+                and not automatic_detection_checked
+            )
+            for child in self.language_file_row.GetChildren():
+                window = child.GetWindow()
+                if window is not None:
+                    window.Show(show_manual_language_path)
+
+        if hasattr(self, "save_found_language_entries"):
+            self.save_found_language_entries.Show(
+                external_language_enabled
+                or save_entries_checked
+            )
+
+        if hasattr(self, "simulate_missing_display_name"):
+            self.simulate_missing_display_name.Show(
+                btsp_cache_enabled
+                or external_language_enabled
+                or simulation_checked
+            )
+
+        if hasattr(self, "delete_display_name_data_button"):
+            self.delete_display_name_data_button.Show(True)
+
+        if hasattr(self, "simulated_missing_alias_row"):
+            for child in self.simulated_missing_alias_row.GetChildren():
+                window = child.GetWindow()
+                if window is not None:
+                    window.Show(simulation_checked)
 
         if not separate_groups_enabled:
             self.add_group_item_frames.SetValue(False)
@@ -4849,6 +5189,681 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         value = re.sub(r"_+", "_", value)
         return value.strip("_")
 
+    def _reset_external_language_operation_state(self) -> None:
+        """
+        Clears per-operation external language usage and write statistics.
+        """
+        self._external_language_used = {}
+        self._found_entries_used = {}
+        self._pending_found_entries = {}
+        self._found_entries_write_error = ""
+        self._found_entries_written_count = 0
+        self._external_language_prepared = False
+        self._display_name_resolution_cache = {}
+
+    def _release_operation_display_name_caches(self) -> None:
+        """
+        Releases per-operation display-name cache data after reporting.
+
+        The embedded display-name table stays loaded because it is static plugin
+        data. This clears only data gathered during the latest operation, such
+        as resolver results, external source usage and pending cache writes.
+        """
+        self._external_language_used = {}
+        self._found_entries_used = {}
+        self._pending_found_entries = {}
+        self._display_name_resolution_cache = {}
+
+    def _normalize_language_alias(self, value: str) -> str:
+        """
+        Converts language keys and test aliases into the resolver's alias form.
+        """
+        value = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(value))
+        value = value.lower().replace("-", "_").replace(" ", "_")
+        value = re.sub(r"_+", "_", value)
+        return value.strip("_")
+
+    def _language_key_to_alias(self, language_key: str) -> Optional[str]:
+        """
+        Converts an accepted language key into its searchable alias.
+        """
+        key = str(language_key).strip()
+        if not key.endswith(".name"):
+            return None
+        if not key.startswith(("tile.", "item.", "block.")):
+            return None
+
+        parts = key.split(".")
+        if len(parts) < 3:
+            return None
+
+        alias_parts = [
+            self._normalize_language_alias(part)
+            for part in parts[1:-1]
+        ]
+        alias = "_".join(part for part in alias_parts if part)
+        return alias or None
+
+    def _is_safe_language_value(self, value: str) -> bool:
+        """
+        Validates one external display name before it can affect sorting.
+        """
+        value = str(value).strip()
+        if not value:
+            return False
+        if "\x00" in value or "\r" in value or "\n" in value:
+            return False
+        if re.search(r"%\d*\$?[a-zA-Z]", value):
+            return False
+        return True
+
+    def _parse_display_name_file(
+        self,
+        path: Path,
+    ) -> Tuple[Dict[str, Tuple[str, str]], Dict[str, str]]:
+        """
+        Parses accepted display-name entries from a language or BTSP file.
+
+        Returns an alias map and the original key / value entries.
+        """
+        aliases: Dict[str, Tuple[str, str]] = {}
+        raw_entries: Dict[str, str] = {}
+
+        content = path.read_text(encoding="utf-8-sig", errors="replace")
+        for raw_line in content.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+
+            language_key, display_name = line.split("=", 1)
+            language_key = language_key.strip()
+            display_name = display_name.strip()
+
+            alias = self._language_key_to_alias(language_key)
+            if alias is None or not self._is_safe_language_value(display_name):
+                continue
+
+            if alias not in aliases:
+                aliases[alias] = (language_key, display_name)
+            if language_key not in raw_entries:
+                raw_entries[language_key] = display_name
+
+        return aliases, raw_entries
+
+    def _get_plugin_directory(self) -> Path:
+        """
+        Returns the directory containing this plugin file when available.
+        """
+        try:
+            return Path(__file__).resolve().parent
+        except Exception:
+            return Path.cwd()
+
+    def _get_plugin_created_display_name_paths(self) -> List[Path]:
+        """
+        Returns plugin-created display-name files and folders that may exist.
+
+        This method only identifies locations owned by Blocks to Storage. It
+        never includes Minecraft language files, worlds, reports or the plugin.
+        """
+        plugin_file = self._get_plugin_directory() / self.FOUND_ENTRIES_FILENAME
+        fallback_directory = Path.home() / ".blocks_to_storage"
+        fallback_file = fallback_directory / self.FOUND_ENTRIES_FILENAME
+
+        paths: List[Path] = []
+        seen = set()
+
+        for candidate in (
+            plugin_file,
+            fallback_file,
+            fallback_directory,
+        ):
+            candidate_text = str(candidate)
+            if candidate_text in seen:
+                continue
+            seen.add(candidate_text)
+
+            try:
+                if candidate.exists():
+                    paths.append(candidate)
+            except Exception:
+                continue
+
+        return paths
+
+    def _clear_loaded_display_name_data(self) -> None:
+        """
+        Clears all in-memory external and cached display-name state.
+        """
+        self._external_language_aliases = {}
+        self._external_language_raw_entries = {}
+        self._found_entries_aliases = {}
+        self._found_entries_raw_entries = {}
+        self._external_language_loaded_path = ""
+        self._external_language_loaded_mtime = None
+        self._external_language_load_error = ""
+        self._external_language_loaded_count = 0
+        self._external_language_used = {}
+        self._found_entries_used = {}
+        self._pending_found_entries = {}
+        self._found_entries_write_error = ""
+        self._found_entries_written_count = 0
+        self._external_language_prepared = False
+        self._display_name_resolution_cache = {}
+
+    def _delete_plugin_created_display_name_data(self, _) -> None:
+        """
+        Confirms and deletes only plugin-created display-name data.
+
+        Exact local paths are shown in the interactive confirmation window so
+        users may inspect or delete them manually. These paths are not added to
+        export reports, preserving report privacy by default.
+        """
+        found_paths = self._get_plugin_created_display_name_paths()
+
+        if not found_paths:
+            wx.MessageBox(
+                "No plugin-created display-name files or folders were found.",
+                "Blocks to Storage",
+                wx.OK | wx.ICON_INFORMATION,
+                self,
+            )
+            return
+
+        listed_paths = "\n".join(
+            f"• {path}"
+            for path in found_paths
+        )
+        message = (
+            "Blocks to Storage found the following plugin-created data:\n\n"
+            f"{listed_paths}\n\n"
+            "Only these listed files and the plugin-created fallback folder "
+            "will be deleted. The fallback folder is removed only if it is "
+            "empty after its cache file is deleted.\n\n"
+            "The plugin, Minecraft language files, worlds and export reports "
+            "will not be deleted. You may cancel and use the paths above to "
+            "delete files manually or selectively.\n\n"
+            "Continue?"
+        )
+
+        dialog = wx.MessageDialog(
+            self,
+            message,
+            "Delete plugin-created display-name data?",
+            wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
+        )
+
+        try:
+            if dialog.ShowModal() != wx.ID_YES:
+                return
+        finally:
+            dialog.Destroy()
+
+        deleted: List[Path] = []
+        failed: List[Tuple[Path, str]] = []
+
+        files = [
+            path
+            for path in found_paths
+            if path.name == self.FOUND_ENTRIES_FILENAME
+        ]
+        folders = [
+            path
+            for path in found_paths
+            if path.name == ".blocks_to_storage"
+        ]
+
+        for file_path in files:
+            try:
+                if file_path.is_file():
+                    file_path.unlink()
+                    deleted.append(file_path)
+            except Exception as exc:
+                failed.append((file_path, str(exc)))
+
+        for folder_path in folders:
+            try:
+                if folder_path.is_dir() and not any(folder_path.iterdir()):
+                    folder_path.rmdir()
+                    deleted.append(folder_path)
+            except Exception as exc:
+                failed.append((folder_path, str(exc)))
+
+        self._clear_loaded_display_name_data()
+
+        result_lines = []
+        if deleted:
+            result_lines.append("Deleted:")
+            result_lines.extend(f"• {path}" for path in deleted)
+
+        if failed:
+            if result_lines:
+                result_lines.append("")
+            result_lines.append("Could not delete:")
+            result_lines.extend(
+                f"• {path}\n  Reason: {reason}"
+                for path, reason in failed
+            )
+
+        if not result_lines:
+            result_lines.append(
+                "No files were deleted. They may already have been removed."
+            )
+
+        wx.MessageBox(
+            "\n".join(result_lines),
+            "Blocks to Storage",
+            wx.OK | (
+                wx.ICON_WARNING
+                if failed
+                else wx.ICON_INFORMATION
+            ),
+            self,
+        )
+
+    def _get_existing_found_entries_path(self) -> Optional[Path]:
+        """
+        Returns an existing Found Entries.BTSP path without creating anything.
+
+        The plugin directory has priority over the fallback user-data directory.
+        Missing files are treated as a normal empty-cache state.
+        """
+        candidates = [
+            self._get_plugin_directory() / self.FOUND_ENTRIES_FILENAME,
+            Path.home() / ".blocks_to_storage" / self.FOUND_ENTRIES_FILENAME,
+        ]
+
+        for candidate in candidates:
+            try:
+                if candidate.is_file():
+                    return candidate
+            except Exception:
+                continue
+
+        return None
+
+    def _get_found_entries_path(self) -> Optional[Path]:
+        """
+        Chooses a writable location for Found Entries.BTSP.
+
+        The plugin directory is preferred. A user-data directory is used only
+        when the plugin directory is not writable.
+        """
+        candidate_directories = [
+            self._get_plugin_directory(),
+            Path.home() / ".blocks_to_storage",
+        ]
+
+        for directory in candidate_directories:
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+                test_path = directory / ".btsp_write_test.tmp"
+                with test_path.open("w", encoding="utf-8") as handle:
+                    handle.write("test")
+                test_path.unlink()
+                return directory / self.FOUND_ENTRIES_FILENAME
+            except Exception:
+                continue
+
+        return None
+
+    def _detect_installed_language_file(self) -> Optional[Path]:
+        """
+        Checks known Minecraft for Windows locations without recursive searching.
+        """
+        configured = self.language_file_path.GetValue().strip()
+        candidates: List[Path] = []
+
+        if configured:
+            candidates.append(Path(configured))
+
+        for drive_code in range(ord("C"), ord("Z") + 1):
+            drive_root = Path(f"{chr(drive_code)}:/")
+            candidates.append(
+                drive_root / self.DEFAULT_MINECRAFT_LANGUAGE_RELATIVE_PATH
+            )
+
+        seen = set()
+        for candidate in candidates:
+            candidate_text = str(candidate)
+            if candidate_text in seen:
+                continue
+            seen.add(candidate_text)
+
+            try:
+                if candidate.is_file():
+                    return candidate
+            except Exception:
+                continue
+
+        return None
+
+    def _get_selected_language_file(self) -> Optional[Path]:
+        """
+        Returns the configured or automatically detected language file.
+        """
+        if not self.use_installed_language_data.GetValue():
+            return None
+
+        configured = self.language_file_path.GetValue().strip()
+        if configured:
+            configured_path = Path(configured)
+            try:
+                if configured_path.is_file():
+                    return configured_path
+            except Exception:
+                pass
+
+        if self.auto_detect_language_file.GetValue():
+            detected = self._detect_installed_language_file()
+            if detected is not None:
+                try:
+                    self.language_file_path.SetValue(str(detected))
+                except Exception:
+                    pass
+                return detected
+
+        return None
+
+    def _load_found_entries_file(self) -> None:
+        """
+        Loads Found Entries.BTSP once when its independent cache is enabled.
+
+        Missing, empty, unreadable or malformed files are treated as an empty
+        cache. They do not stop the operation or trigger repeated file checks.
+        """
+        self._found_entries_aliases = {}
+        self._found_entries_raw_entries = {}
+
+        if not self.use_found_entries_cache.GetValue():
+            return
+
+        found_path = self._get_existing_found_entries_path()
+        if found_path is None:
+            return
+
+        try:
+            (
+                aliases,
+                raw_entries,
+            ) = self._parse_display_name_file(found_path)
+
+            if aliases:
+                self._found_entries_aliases = aliases
+                self._found_entries_raw_entries = raw_entries
+        except Exception:
+            self._found_entries_aliases = {}
+            self._found_entries_raw_entries = {}
+
+
+    def _ensure_external_language_data_loaded(self) -> bool:
+        """
+        Prepares enabled display-name sources once for the operation.
+
+        Found Entries.BTSP is independent of installed-language access. Missing
+        optional sources fail open and all later lookups use in-memory data.
+        """
+        if self._external_language_prepared:
+            return bool(
+                self._found_entries_aliases
+                or self._external_language_aliases
+            )
+
+        self._external_language_prepared = True
+        self._external_language_aliases = {}
+        self._external_language_raw_entries = {}
+        self._external_language_loaded_path = ""
+        self._external_language_loaded_mtime = None
+        self._external_language_load_error = ""
+        self._external_language_loaded_count = 0
+
+        self._load_found_entries_file()
+
+        if not self.use_installed_language_data.GetValue():
+            return bool(self._found_entries_aliases)
+
+        language_path = self._get_selected_language_file()
+        if language_path is None:
+            self._external_language_load_error = "Language file not found."
+            return bool(self._found_entries_aliases)
+
+        try:
+            modified_time = language_path.stat().st_mtime_ns
+            (
+                self._external_language_aliases,
+                self._external_language_raw_entries,
+            ) = self._parse_display_name_file(language_path)
+            self._external_language_loaded_path = str(language_path)
+            self._external_language_loaded_mtime = modified_time
+            self._external_language_loaded_count = len(
+                self._external_language_aliases
+            )
+        except Exception as exc:
+            self._external_language_aliases = {}
+            self._external_language_raw_entries = {}
+            self._external_language_loaded_path = ""
+            self._external_language_loaded_mtime = None
+            self._external_language_load_error = str(exc)
+            self._external_language_loaded_count = 0
+
+        return bool(
+            self._found_entries_aliases
+            or self._external_language_aliases
+        )
+
+
+    def _get_simulated_missing_item_alias(self) -> str:
+        """
+        Returns the one embedded item alias ignored by the debug simulation.
+        """
+        if not self.simulate_missing_display_name.GetValue():
+            return ""
+        return self._normalize_display_name_for_audit(
+            self.simulated_missing_alias.GetValue()
+        )
+
+    def _should_ignore_embedded_display_name(self, item_name: str) -> bool:
+        """
+        Returns whether the debug simulation should skip embedded resolution.
+        """
+        simulated_alias = self._get_simulated_missing_item_alias()
+        if not simulated_alias:
+            return False
+
+        item_alias = self._normalize_display_name_for_audit(item_name)
+        return item_alias == simulated_alias
+
+    def _queue_found_entry(
+        self,
+        language_key: str,
+        display_name: str,
+    ) -> None:
+        """
+        Queues one safe external entry for optional atomic BTSP writing.
+        """
+        if not self.save_found_language_entries.GetValue():
+            return
+        if language_key in self._found_entries_raw_entries:
+            return
+        if language_key in self._pending_found_entries:
+            return
+        if not self._is_safe_language_value(display_name):
+            return
+
+        self._pending_found_entries[language_key] = display_name
+
+    def _write_pending_found_entries(self) -> None:
+        """
+        Atomically merges newly used entries into Found Entries.BTSP.
+        """
+        if not self._pending_found_entries:
+            return
+
+        destination = self._get_found_entries_path()
+        if destination is None:
+            self._found_entries_write_error = "No writable data directory was available."
+            return
+
+        existing_entries: Dict[str, str] = {}
+        existing_comments: List[str] = []
+
+        if destination.is_file():
+            try:
+                content = destination.read_text(
+                    encoding="utf-8-sig",
+                    errors="replace",
+                )
+                for raw_line in content.splitlines():
+                    stripped = raw_line.strip()
+                    if stripped.startswith("#"):
+                        existing_comments.append(raw_line)
+                    elif "=" in raw_line:
+                        key, value = raw_line.split("=", 1)
+                        key = key.strip()
+                        value = value.strip()
+                        if key and key not in existing_entries:
+                            existing_entries[key] = value
+            except Exception as exc:
+                self._found_entries_write_error = str(exc)
+                return
+
+        added_count = 0
+        for key, value in sorted(self._pending_found_entries.items()):
+            if key not in existing_entries:
+                existing_entries[key] = value
+                added_count += 1
+
+        if added_count == 0:
+            return
+
+        header = [
+            "# Blocks to Storage discovered display-name entries",
+            "# Format version: 1",
+            "# Source language: en_US",
+            "# Entries below were missing from the plugin's embedded table.",
+            "",
+        ]
+
+        output_lines = header + [
+            f"{key}={value}"
+            for key, value in sorted(existing_entries.items())
+        ]
+        output_text = "\n".join(output_lines).rstrip() + "\n"
+
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                newline="\n",
+                prefix=destination.name + ".",
+                suffix=".tmp",
+                dir=str(destination.parent),
+                delete=False,
+            ) as handle:
+                handle.write(output_text)
+                handle.flush()
+                try:
+                    os.fsync(handle.fileno())
+                except Exception:
+                    pass
+                temporary_path = Path(handle.name)
+
+            os.replace(str(temporary_path), str(destination))
+            self._found_entries_written_count = added_count
+            self._found_entries_write_error = ""
+            self._load_found_entries_file()
+        except Exception as exc:
+            self._found_entries_write_error = str(exc)
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink()
+                except Exception:
+                    pass
+
+    def _log_external_language_summary(self) -> None:
+        """
+        Adds non-sensitive display-name source status to the export report.
+        """
+        cache_enabled = self.use_found_entries_cache.GetValue()
+        installed_enabled = self.use_installed_language_data.GetValue()
+
+        self._log(f"Found Entries cache enabled: {cache_enabled}")
+        if cache_enabled:
+            self._log(
+                f"Found Entries aliases loaded: "
+                f"{len(self._found_entries_aliases):,}"
+            )
+            self._log(
+                f"Found Entries entries used: "
+                f"{len(self._found_entries_used):,}"
+            )
+
+        self._log(f"Installed language fallback enabled: {installed_enabled}")
+        if installed_enabled:
+            loaded = bool(self._external_language_aliases)
+            self._log(f"Installed language file loaded: {loaded}")
+            self._log(
+                f"Installed language aliases loaded: "
+                f"{self._external_language_loaded_count:,}"
+            )
+            self._log(
+                f"Installed language entries used: "
+                f"{len(self._external_language_used):,}"
+            )
+            self._log(
+                f"New entries written to {self.FOUND_ENTRIES_FILENAME}: "
+                f"{self._found_entries_written_count:,}"
+            )
+
+            if self._external_language_load_error:
+                self._log(
+                    f"Installed language load issue: "
+                    f"{self._external_language_load_error}"
+                )
+
+            if (
+                self.include_display_name_audit.GetValue()
+                and loaded
+                and self._external_language_loaded_path
+            ):
+                self._log(
+                    f"Installed language file: "
+                    f"{Path(self._external_language_loaded_path).name}"
+                )
+
+        if self._found_entries_write_error:
+            self._log(
+                f"{self.FOUND_ENTRIES_FILENAME} write issue: "
+                f"{self._found_entries_write_error}"
+            )
+
+        if self.include_display_name_audit.GetValue():
+            if self._external_language_used:
+                self._log("Installed language fallback matches:")
+                for item_name, (
+                    display_name,
+                    language_key,
+                    alias,
+                ) in sorted(self._external_language_used.items()):
+                    self._log(
+                        f'  {item_name} -> "{display_name}" '
+                        f"[{language_key}], alias {alias}"
+                    )
+
+            if self._found_entries_used:
+                self._log(f"{self.FOUND_ENTRIES_FILENAME} matches:")
+                for item_name, (
+                    display_name,
+                    language_key,
+                    alias,
+                ) in sorted(self._found_entries_used.items()):
+                    self._log(
+                        f'  {item_name} -> "{display_name}" '
+                        f"[{language_key}], alias {alias}"
+                    )
+
+
     def _get_language_display_candidates(self, item_name: str) -> List[str]:
         """
         Returns conservative Bedrock language aliases for one internal item key.
@@ -4954,19 +5969,84 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         item_name: str,
     ) -> Optional[Tuple[str, str, str]]:
         """
-        Resolves an item key to a verified English Bedrock display name.
+        Resolves one item through embedded, BTSP and installed language data.
 
-        Returns the display name, source language key and matching alias. The
-        caller decides whether the result is used for ABC sorting, diagnostics
-        or both. Unresolved and manually excluded names keep their fallback key.
+        Each result, including an unresolved result, is cached for the current
+        operation so sorting and diagnostics do not repeat file or alias work.
         """
-        for candidate in self._get_language_display_candidates(item_name):
-            result = self.BEDROCK_EN_US_DISPLAY_NAMES.get(candidate)
+        item_name = str(item_name)
+
+        if item_name in self._display_name_resolution_cache:
+            return self._display_name_resolution_cache[item_name]
+
+        candidates = self._get_language_display_candidates(item_name)
+        ignore_embedded = self._should_ignore_embedded_display_name(item_name)
+
+        if not ignore_embedded:
+            for candidate in candidates:
+                result = self.BEDROCK_EN_US_DISPLAY_NAMES.get(candidate)
+                if result is not None:
+                    language_key, display_name = result
+                    resolved = (
+                        str(display_name),
+                        str(language_key),
+                        candidate,
+                    )
+                    self._display_name_resolution_cache[item_name] = resolved
+                    return resolved
+
+        use_btsp_cache = self.use_found_entries_cache.GetValue()
+        use_installed_language = self.use_installed_language_data.GetValue()
+
+        if not use_btsp_cache and not use_installed_language:
+            self._display_name_resolution_cache[item_name] = None
+            return None
+
+        self._ensure_external_language_data_loaded()
+
+        for candidate in candidates:
+            result = self._found_entries_aliases.get(candidate)
             if result is not None:
                 language_key, display_name = result
-                return str(display_name), str(language_key), candidate
+                resolved = (
+                    str(display_name),
+                    str(language_key),
+                    candidate,
+                )
+                self._found_entries_used[item_name] = resolved
+                self._display_name_resolution_cache[item_name] = resolved
+                return resolved
 
+        if not use_installed_language:
+            self._display_name_resolution_cache[item_name] = None
+            return None
+
+        for candidate in candidates:
+            result = self._external_language_aliases.get(candidate)
+            if result is None:
+                continue
+
+            language_key, display_name = result
+
+            # External data fills missing embedded aliases only. It never
+            # replaces a trusted embedded entry outside the debug simulation.
+            embedded_conflict = self.BEDROCK_EN_US_DISPLAY_NAMES.get(candidate)
+            if embedded_conflict is not None and not ignore_embedded:
+                continue
+
+            resolved = (
+                str(display_name),
+                str(language_key),
+                candidate,
+            )
+            self._external_language_used[item_name] = resolved
+            self._queue_found_entry(str(language_key), str(display_name))
+            self._display_name_resolution_cache[item_name] = resolved
+            return resolved
+
+        self._display_name_resolution_cache[item_name] = None
         return None
+
 
     def _log_display_name_audit(self, counts: Dict[str, int]) -> None:
         """
@@ -6775,6 +7855,13 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         Main workflow: scan, plan, clear, place storage and write the report.
         """
         total_start = time.perf_counter()
+        self._reset_external_language_operation_state()
+
+        if (
+            self.use_found_entries_cache.GetValue()
+            or self.use_installed_language_data.GetValue()
+        ):
+            self._ensure_external_language_data_loaded()
 
         try:
             self._log("Blocks to Storage Export Report")
@@ -6787,6 +7874,15 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             self._log(f"Large selection warning enabled: {self.show_large_selection_warning.GetValue()}")
             self._log(f"Item frame label audit enabled: {self.include_item_frame_audit.GetValue()}")
             self._log(f"Display-name ABC audit enabled: {self.include_display_name_audit.GetValue()}")
+            self._log(f"Found Entries cache enabled: {self.use_found_entries_cache.GetValue()}")
+            self._log(f"Installed language fallback enabled: {self.use_installed_language_data.GetValue()}")
+            self._log(f"Save found display-name entries: {self.save_found_language_entries.GetValue()}")
+            self._log(f"Simulate missing display-name entry: {self.simulate_missing_display_name.GetValue()}")
+            if self.simulate_missing_display_name.GetValue():
+                self._log(
+                    f"Simulated missing alias: "
+                    f"{self._get_simulated_missing_item_alias() or '(empty)'}"
+                )
 
             container = self._get_selected_container()
             use_double_chests = container == self.CONTAINER_CHEST and self.use_double_chests.GetValue()
@@ -6910,6 +8006,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 self._log("")
                 self._log_display_name_audit(counts)
 
+            self._write_pending_found_entries()
+            self._log("")
+            self._log_external_language_summary()
+
             self._log("")
             self._log_skipped_block_report(skipped_counts, skipped_by_reason)
 
@@ -6997,7 +8097,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             self._log(f"Operation failed: {exc}")
             self._log(f"Total operation time before failure: {self._format_seconds(time.perf_counter() - total_start)}")
         finally:
-            self._finalize_report()
+            try:
+                self._finalize_report()
+            finally:
+                self._release_operation_display_name_caches()
 
 
 export = dict(name="Blocks to Storage", operation=PluginClassName)
