@@ -19,6 +19,7 @@ Which plugin or area is this feature for?
 Examples:
 
 * Auto Light
+* Auto Farmland
 * Blocks to Storage
 * Dark Mode UI
 * New plugin idea
