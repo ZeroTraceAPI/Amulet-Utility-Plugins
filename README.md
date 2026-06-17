@@ -1,12 +1,12 @@
 # Amulet Utility Plugins
 
-A collection of free utility plugins for Amulet Map Editor, focused on Minecraft Bedrock Edition world editing, automation, cleanup, interface improvements, and quality-of-life tools.
+A collection of free utility plugins for Amulet Map Editor and optional companion tools for Minecraft Bedrock Edition world editing, automation, cleanup, interface improvements, and quality-of-life tools.
 
-These plugins are made for practical Amulet workflows. Some tools may be niche or built for specific edge cases, but each one is designed to save time, reduce repetitive work, improve usability, or make certain editing tasks easier to manage.
+These plugins are made for practical editing workflows. Some tools may be niche or built for specific edge cases, but each one is designed to save time, reduce repetitive work, improve usability, or make certain editing tasks easier to manage.
 
-Whether you are a map creator, builder, technical player, tester, world editor, or someone who spends a lot of time working in Amulet, these plugins are meant to help with problems that can be tedious, time-consuming, visually uncomfortable, or awkward to handle manually.
+Whether you are a map creator, builder, technical player, tester, world editor, or someone who spends a lot of time working in Amulet or Minecraft Bedrock Edition, these tools are meant to help with problems that can be tedious, time-consuming, visually uncomfortable, or awkward to handle manually.
 
-If this repository does not currently have a tool for the problem you are trying to solve, feedback and feature requests are welcome. Useful ideas may be considered for future plugins or updates.
+If this repository does not currently have a tool for the problem you are trying to solve, feedback and feature requests are welcome. Useful ideas may be considered for future plugins, companion tools, or updates.
 
 
 ## Current Plugins
@@ -37,11 +37,22 @@ This can be useful for clearing large areas, recovering materials from world edi
 
 ### Dark Mode UI
 
-Dark Mode UI applies a reversible dark theme to Amulet's wxPython interface after the 3d editor or plugin system loads.
+Dark Mode UI applies a reversible dark theme to Amulet's wxPython interface after the 3D editor or plugin system loads.
 
 It keeps a persistent controller attached to the Amulet window, can re-theme newly shown panels and includes buttons to open or delete the plugin config file.
 
 This can be useful for long editing sessions, low-light environments, screenshots, or users who prefer a darker interface. The plugin changes UI colors only and does not edit the world.
+
+
+## Optional Companion Tools
+
+### World Chunk Loader
+
+World Chunk Loader is a Minecraft Bedrock behavior pack that generates and saves chunks around a chosen area.
+
+It is mainly included to help prepare worlds for Amulet and the plugins in this repository, but it can also be useful for map preparation, testing, pre-generating areas or reducing chunk loading during normal play.
+
+See [`Companion-Tools/World-Chunk-Loader`](Companion-Tools/World-Chunk-Loader) for downloads, installation instructions, commands and credits.
 
 
 ## Screenshots
@@ -57,7 +68,8 @@ Plugin screenshot folders:
 
 ![Amulet Utility Plugins preview](Media/Misc/Cover_1.png)
 
-## Installation (Windows)
+
+## Plugin Installation (Windows)
 
 1. Download the plugin file you want to use.
 2. Move the file into:
@@ -74,16 +86,18 @@ Create the folders manually if needed.
 
 These plugins are currently tested on Windows. They may work on other operating systems, but Windows is the supported environment for now.
 
+World Chunk Loader is designed for Minecraft Bedrock Edition. Platform-specific import and behavior-pack activation steps may differ.
+
 
 ## Cost
 
-These plugins are free from the original maintainer. Donations may be accepted, but there is no required payment or forced paywall.
+These plugins and companion tools are free from the original maintainer. Donations may be accepted, but there is no required payment or forced paywall.
 
 ## Official Source
 
 The official source is the [Amulet Utility Plugins GitHub repository](https://github.com/ZeroTraceAPI/Amulet-Utility-Plugins).
 
-If you share, fork, modify, package, or redistribute these plugins, please link back to the official source so users can find a clean and current copy.
+If you share, fork, modify, package, or redistribute these plugins or companion tools, please link back to the official source so users can find a clean and current copy.
 
 ## Contributing
 
@@ -96,5 +110,5 @@ If you do not want to create a GitHub account, you can contact the maintainer by
 
 `ZeroTraceAPI@proton.me`
 
-When relevant, include the plugin version, Amulet version, Minecraft Bedrock version, and a clear description. 
+When relevant, include the plugin or tool version, Amulet version, Minecraft Bedrock version, and a clear description. 
 Email support is not guaranteed, but reasonable project-related messages are welcome.
