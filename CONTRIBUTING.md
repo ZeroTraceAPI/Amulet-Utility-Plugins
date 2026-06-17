@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for considering a contribution to Amulet Utility Plugins.
+Thank you for considering a contribution to Amulet Utility Plugins and its optional companion tools.
 
 Contributions may include code, bug reports, feature requests, testing notes, documentation improvements, screenshots, examples, assets, compatibility information, or other project feedback.
 
@@ -21,8 +21,8 @@ When contributing code, please try to:
 1. Keep changes focused.
 2. Avoid unrelated rewrites.
 3. Explain what changed and why.
-4. Test the plugin when possible before submitting.
-5. Mention the Amulet version and Minecraft version used for testing.
+4. Test the affected plugin or companion tool when possible before submitting.
+5. Mention the Amulet version, Minecraft edition, and Minecraft version used for testing when relevant.
 6. Avoid adding unnecessary dependencies.
 7. Keep compatibility with Minecraft Bedrock Edition and Amulet in mind.
 8. Follow the existing code style where practical.
@@ -45,7 +45,7 @@ For this project:
 
 * `You` means the person submitting a Contribution.
 * `Maintainer` means the project maintainer or repository owner.
-* `Project` means Amulet Utility Plugins, including its code, documentation, issue templates, discussions, examples, and related files.
+* `Project` means Amulet Utility Plugins, including its Amulet plugins, optional companion tools, code, documentation, issue templates, discussions, examples, and related files.
 * `Contribution` means any code, text, documentation, image, screenshot, test result, suggestion, issue, pull request, discussion post, assets, or other material submitted to the Project.
 * `Submit` means sending, posting, uploading, or otherwise providing a Contribution through GitHub or another project-managed channel.
 
