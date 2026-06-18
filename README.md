@@ -23,7 +23,7 @@ This can be useful for map cleanup, spawn-proofing, build preparation, testing a
 
 Auto Farmland converts eligible exposed terrain in a selected Minecraft Bedrock Edition region into farmland and can plant crops automatically.
 
-It supports farmland-only operations, single crops, alternating crop rows, assorted crop patterns, melon and pumpkin stem layouts, fixed or randomized growth states, and selection-aware row direction. It can also detect existing hydration, add safe water sources, and cover new water with one of 61 selectable waterlogged upper slabs.
+It supports farmland-only operations, single crops, alternating crop rows, assorted crop patterns, melon and pumpkin stem layouts, fixed or randomized growth states, and selection-aware row direction. It can also detect existing hydration, add safe water sources, and cover new water with one of 67 selectable waterlogged upper slabs.
 
 This can be useful for creating or expanding farms, preparing large crop fields, testing layouts, restoring farmland, or reducing repetitive tilling, planting, and irrigation work.
 
