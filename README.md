@@ -46,13 +46,15 @@ This can be useful for long editing sessions, low-light environments, screenshot
 
 ## Optional Companion Tools
 
-### World Chunk Loader
+### World Chunk Pre-Generator
 
-World Chunk Loader is a Minecraft Bedrock behavior pack that generates and saves chunks around a chosen area.
+World Chunk Pre-Generator is a Minecraft Bedrock behavior pack that temporarily moves the player through a selected square area so Minecraft generates and saves nearby chunks in advance.
 
-It is mainly included to help prepare worlds for Amulet and the plugins in this repository, but it can also be useful for map preparation, testing, pre-generating areas or reducing chunk loading during normal play.
+It does not keep chunks loaded after the operation ends.
 
-See [`Companion-Tools/World-Chunk-Loader`](Companion-Tools/World-Chunk-Loader) for downloads, installation instructions, commands and credits.
+The pack is mainly intended to prepare worlds for Amulet and the plugins in this repository. It can also help with map preparation, testing, pre-generating areas, and reducing terrain-generation pauses during later play.
+
+See [`Companion-Tools/World-Chunk-Pre-Generator`](Companion-Tools/World-Chunk-Pre-Generator) for downloads, installation instructions, commands, and credits.
 
 
 ## Screenshots
@@ -86,7 +88,7 @@ Create the folders manually if needed.
 
 These plugins are currently tested on Windows. They may work on other operating systems, but Windows is the supported environment for now.
 
-World Chunk Loader is designed for Minecraft Bedrock Edition. Platform-specific import and behavior-pack activation steps may differ.
+World Chunk Pre-Generator is designed for Minecraft Bedrock Edition. Platform-specific import and behavior-pack activation steps may differ.
 
 
 ## Cost

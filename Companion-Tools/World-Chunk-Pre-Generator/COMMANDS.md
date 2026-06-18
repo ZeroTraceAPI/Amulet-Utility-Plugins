@@ -1,6 +1,6 @@
-# World Chunk Loader Commands
+# World Chunk Pre-Generator Commands
 
-World Chunk Loader provides reliable and fast commands for generating and saving a centered square area around the player.
+World Chunk Pre-Generator provides reliable and fast commands for pre-generating and saving a centered square area around the player.
 
 Run commands from the position you want to use as the center of the area.
 
@@ -8,21 +8,21 @@ Run commands from the position you want to use as the center of the area.
 
 Reliable mode moves 4 blocks per step.
 
-This is the recommended mode for normal use and for devices or worlds that may need more time to generate chunks.
+This is the recommended mode for normal use and for devices or worlds that may need more time to generate and save chunks.
 
 Examples:
 
 ```mcfunction
-/function wcl/load_250
-/function wcl/load_500
-/function wcl/load_1000
-/function wcl/load_2500
+/function load_250
+/function load_500
+/function load_1000
+/function load_2500
 ```
 
 Command format:
 
 ```mcfunction
-/function wcl/load_SIZE
+/function load_SIZE
 ```
 
 ## Fast Mode
@@ -34,16 +34,16 @@ It can finish more quickly, but Minecraft must still have enough time to generat
 Examples:
 
 ```mcfunction
-/function wcl/fast_250
-/function wcl/fast_500
-/function wcl/fast_1000
-/function wcl/fast_2500
+/function fast_250
+/function fast_500
+/function fast_1000
+/function fast_2500
 ```
 
 Command format:
 
 ```mcfunction
-/function wcl/fast_SIZE
+/function fast_SIZE
 ```
 
 ## Available Sizes
@@ -79,37 +79,37 @@ The number in a command is the approximate width and length of the square area i
 For example:
 
 ```mcfunction
-/function wcl/load_250
+/function load_250
 ```
 
-processes an approximately `250 × 250` block area centered on the position where the command was started.
+pre-generates approximately `250 × 250` block area centered on the position where the command was started.
 
 The number is not a radius. A `250 × 250` area extends approximately 125 blocks in each direction from the starting position: north, south, east, and west.
 
-Minecraft may also save some surrounding chunks because the game normally loads an area around the player.
+Minecraft may also generate and save some surrounding chunks because the game normally loads an area around the player.
 
 ## Stop an Active Run
 
 ```mcfunction
-/function wcl/stop
+/function stop
 ```
 
-This safely cancels the active operation, returns the player when the saved return position is available, and removes temporary runtime data.
+This safely cancels the active pre-generation operation, returns the player when the saved return position is available, and removes temporary runtime data.
 
 ## Emergency Cleanup
 
 ```mcfunction
-/function wcl/cleanup
+/function cleanup
 ```
 
 Use this after a crash, forced shutdown, interrupted operation, or another problem that prevented normal cleanup.
 
-It removes temporary World Chunk Loader data and attempts to return the active player when the saved return position is still available.
+It removes temporary World Chunk Pre-Generator data and attempts to return the active player when the saved return position is still available.
 
 ## Remove Data from Older Versions
 
 ```mcfunction
-/function wcl/remove_legacy_data
+/function remove_legacy_data
 ```
 
 This removes objectives, tags, markers, structures, and ticking-area names left by older World Generator and pre-rewrite World Chunk Loader versions.
@@ -118,23 +118,23 @@ Run it once when upgrading a world that used one of those older versions.
 
 ## During an Operation
 
-While World Chunk Loader is running:
+While World Chunk Pre-Generator is running:
 
-* Do not run another loading command.
+* Do not run another pre-generation command.
 * Do not remove or disable the behavior pack.
 * Avoid closing Minecraft until the operation finishes.
-* Use `/function wcl/stop` when you need to cancel safely.
+* Use `/function stop` when you need to cancel safely.
 
 ## After an Interrupted Operation
 
 After reopening the world, run:
 
 ```mcfunction
-/function wcl/cleanup
+/function cleanup
 ```
 
 If the world previously used an older version, you should also run:
 
 ```mcfunction
-/function wcl/remove_legacy_data
+/function remove_legacy_data
 ```
