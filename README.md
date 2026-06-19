@@ -1,116 +1,67 @@
 # Amulet Utility Plugins
 
-A collection of free utility plugins for Amulet Map Editor and optional companion tools for Minecraft Bedrock Edition world editing, automation, cleanup, interface improvements, and quality-of-life tools.
+A collection of free utility plugins for Amulet Map Editor and optional companion tools for Minecraft Bedrock Edition. The project focuses on practical world-editing automation, cleanup, interface improvements, and reducing repetitive work.
 
-These plugins are made for practical editing workflows. Some tools may be niche or built for specific edge cases, but each one is designed to save time, reduce repetitive work, improve usability, or make certain editing tasks easier to manage.
-
-Whether you are a map creator, builder, technical player, tester, world editor, or someone who spends a lot of time working in Amulet or Minecraft Bedrock Edition, these tools are meant to help with problems that can be tedious, time-consuming, visually uncomfortable, or awkward to handle manually.
-
-If this repository does not currently have a tool for the problem you are trying to solve, feedback and feature requests are welcome. Useful ideas may be considered for future plugins, companion tools, or updates.
-
+Some tools are designed for specific workflows or edge cases, but each is intended to make Amulet or Minecraft Bedrock editing faster, easier, or more manageable. Bug reports, feature requests, testing notes, and new ideas are welcome.
 
 ## Current Plugins
 
-### Auto Light
+### [Auto Light](Plugins/Auto%20Light)
 
-Auto Light helps place light sources in dark areas of a selected Minecraft Bedrock Edition world region.
+Places selected light sources across Minecraft Bedrock world regions using fixed-radius or optional brightness-aware coverage. It supports configurable spacing, attachment rules, conservative plant replacement, persistent settings, and operation reports.
 
-It is intended to reduce the amount of manual lighting work needed in caves, builds, underground areas, surface areas, farms, tunnels, and other spaces where visibility or hostile mob spawning may be a concern.
+### [Auto Farmland](Plugins/Auto%20Farmland) (Coming Soon)
 
-This can be useful for map cleanup, spawn-proofing, build preparation, testing areas, or quickly improving lighting across larger selected regions.
+Converts eligible exposed terrain into farmland and can plant single crops, alternating rows, assorted crops, or melon and pumpkin stem layouts. It also supports repeatable growth patterns, existing-hydration detection, safe irrigation, and 67 selectable waterlogged upper-slab covers.
 
-### Auto Farmland (Coming Soon)
+### [Blocks to Storage](Plugins/Blocks%20to%20Storage)
 
-Auto Farmland converts eligible exposed terrain in a selected Minecraft Bedrock Edition region into farmland and can plant crops automatically.
+Collects blocks from selected regions and stores the resulting items instead of discarding them. It supports several container layouts, separated and labeled groups, nested shulker packing, Bedrock-aware item conversion, persistent settings, and detailed export reports.
 
-It supports farmland-only operations, single crops, alternating crop rows, assorted crop patterns, melon and pumpkin stem layouts, fixed or randomized growth states, and selection-aware row direction. It can also detect existing hydration, add safe water sources, and cover new water with one of 67 selectable waterlogged upper slabs.
+### [Dark Mode UI](Plugins/Dark%20Mode%20UI)
 
-This can be useful for creating or expanding farms, preparing large crop fields, testing layouts, restoring farmland, or reducing repetitive tilling, planting, and irrigation work.
+Applies a reversible dark theme to Amulet's wxPython interface, including newly shown panels and supported plugin consoles. It changes interface colors only and does not modify the world.
 
-### Blocks to Storage
+## Optional Companion Tool
 
-Blocks to Storage collects blocks from a selected Minecraft Bedrock Edition world region and places them into storage containers instead of permanently deleting them.
+### [World Chunk Pre-Generator](Companion-Tools/World-Chunk-Pre-Generator)
 
-It can count and sort collected blocks, keep different block types separate, add item-frame labels, and pack large amounts of blocks into shulker boxes. It also handles many block variations automatically so the stored items keep the correct type, color, name, and other supported details.
+Temporarily moves the player through a centered square area so Minecraft Bedrock Edition cam generate and save nearby chunks in advance. It is intended for Amulet preparation, map testing, and reducing later terrain-generation pauses. It does not keep chunks loaded after the operation ends.
 
-This can be useful for clearing large areas, recovering materials from world edits, organizing blocks, testing maps, or turning a selected region into a compact storage area.
-
-### Dark Mode UI
-
-Dark Mode UI applies a reversible dark theme to Amulet's wxPython interface after the 3D editor or plugin system loads.
-
-It keeps a persistent controller attached to the Amulet window, can re-theme newly shown panels and includes buttons to open or delete the plugin config file.
-
-This can be useful for long editing sessions, low-light environments, screenshots, or users who prefer a darker interface. The plugin changes UI colors only and does not edit the world.
-
-
-## Optional Companion Tools
-
-### World Chunk Pre-Generator
-
-World Chunk Pre-Generator is a Minecraft Bedrock behavior pack that temporarily moves the player through a selected square area so Minecraft generates and saves nearby chunks in advance.
-
-It does not keep chunks loaded after the operation ends.
-
-The pack is mainly intended to prepare worlds for Amulet and the plugins in this repository. It can also help with map preparation, testing, pre-generating areas, and reducing terrain-generation pauses during later play.
-
-See [`Companion-Tools/World-Chunk-Pre-Generator`](Companion-Tools/World-Chunk-Pre-Generator) for downloads, installation instructions, commands, and credits.
-
+See the tool's [README](Companion-Tools/World-Chunk-Pre-Generator/README.md) for installation and usage or [`COMMANDS.md`](Companion-Tools/World-Chunk-Pre-Generator/COMMANDS.md) for commands.
 
 ## Screenshots
 
-Preview media and screenshots are available in the [`Media`](Media) folder.
-
-Plugin screenshot folders:
-
-* Auto Light: [`Media/Auto-Light`](Media/Auto-Light)
-* Auto Farmland: [`Media/Auto-Farmland`](Media/Auto-Farmland)
-* Blocks to Storage: [`Media/Blocks-to-Storage`](Media/Blocks-to-Storage)
-* Dark Mode UI: [`Media/Dark-Mode-UI`](Media/Dark-Mode-UI)
+Preview media is available in the [`Media`](Media) folder, with separate folders for [Auto Light](Media/Auto-Light), [Auto Farmland](Media/Auto-Farmland), [Blocks to Storage](Media/Blocks-to-Storage), and [Dark Mode UI](Media/Dark-Mode-UI).
 
 ![Amulet Utility Plugins preview](Media/Misc/Cover.gif)
 
+## Plugin Installation and Compatibility
 
-## Plugin Installation (Windows)
+1. Download any plugin `.py` file you want to use.
+2. Move it into:
 
-1. Download the plugin file you want to use.
-2. Move the file into:
-```
+```text
 %LOCALAPPDATA%\AmuletTeam\AmuletMapEditor\plugins\operations
 ```
+
 3. Restart Amulet Editor.
-4. Open the Operations tab and refresh the plugins if needed.
+4. Open the Operations tab and refresh the plugin list if needed.
 
-Create the folders manually if needed.
+Create the folders manually if they do not already exist.
 
+The plugins are currently tested and supported on Windows. Other operating systems may work but are not currently verified. World Chunk Pre-Generator is designed for Minecraft Bedrock Edition, and its import and activation steps may differ by platform.
 
-## Compatibility Notes
+## Availability, Contact, and Contributing
 
-These plugins are currently tested on Windows. They may work on other operating systems, but Windows is the supported environment for now.
+All plugins and companion tools are free from the original maintainer, with no required payment or forced paywall. Donations may be accepted but are optional.
 
-World Chunk Pre-Generator is designed for Minecraft Bedrock Edition. Platform-specific import and behavior-pack activation steps may differ.
+The official source is the [Amulet Utility Plugins GitHub repository](https://github.com/ZeroTraceAPI/Amulet-Utility-Plugins). When sharing, forking, modifying, packaging, or redistributing these tools, please link back to the official repository so users can find a clean and current copy.
 
+Contributions are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for details. Use GitHub Issues or GitHub Discussions for public questions, bug reports, requests, and testing notes when possible.
 
-## Cost
-
-These plugins and companion tools are free from the original maintainer. Donations may be accepted, but there is no required payment or forced paywall.
-
-## Official Source
-
-The official source is the [Amulet Utility Plugins GitHub repository](https://github.com/ZeroTraceAPI/Amulet-Utility-Plugins).
-
-If you share, fork, modify, package, or redistribute these plugins or companion tools, please link back to the official source so users can find a clean and current copy.
-
-## Contributing
-
-Contributions are welcome. This includes bug reports, feature requests, new ideas, testing notes, documentation improvements, and code changes. Read [`CONTRIBUTING.md`](CONTRIBUTING.md) for more details.
-
-## Contact
-
-For questions, reports, requests, and public discussion, please use GitHub Issues or GitHub Discussions when possible. 
-If you do not want to create a GitHub account, you can contact the maintainer by email:
+If you do not want to create a GitHub account, contact the maintainer at:
 
 `ZeroTraceAPI@proton.me`
 
-When relevant, include the plugin or tool version, Amulet version, Minecraft Bedrock version, and a clear description. 
-Email support is not guaranteed, but reasonable project-related messages are welcome.
+Include the plugin or tool version, Amulet version, Minecraft Bedrock Edition version, and a clear description when relevant. Email support is not guaranteed, but reasonable project-related messages are welcome.
