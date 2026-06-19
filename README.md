@@ -59,7 +59,7 @@ See [`Companion-Tools/World-Chunk-Pre-Generator`](Companion-Tools/World-Chunk-Pr
 
 ## Screenshots
 
-Preview screenshots are available in the [`Media`](Media) folder.
+Preview media and screenshots are available in the [`Media`](Media) folder.
 
 Plugin screenshot folders:
 
@@ -68,7 +68,7 @@ Plugin screenshot folders:
 * Blocks to Storage: [`Media/Blocks-to-Storage`](Media/Blocks-to-Storage)
 * Dark Mode UI: [`Media/Dark-Mode-UI`](Media/Dark-Mode-UI)
 
-![Amulet Utility Plugins preview](Media/Misc/Cover_1.png)
+![Amulet Utility Plugins preview](Media/Misc/Cover.gif)
 
 
 ## Plugin Installation (Windows)
