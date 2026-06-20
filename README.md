@@ -1,8 +1,10 @@
 # Amulet Utility Plugins
 
-A collection of free utility plugins for Amulet Map Editor and optional companion tools for Minecraft Bedrock Edition. The project focuses on practical world-editing automation, cleanup, interface improvements, and reducing repetitive work.
+A collection of free utility plugins for Amulet Map Editor and optional companion tools for Minecraft Bedrock Edition. The project focuses on practical world-editing automation, cleanup, interface improvements, quality-of-life features, and reducing repetitive manual work.
 
-Some tools are designed for specific workflows or edge cases, but each is intended to make Amulet or Minecraft Bedrock editing faster, easier, or more manageable. Bug reports, feature requests, testing notes, and new ideas are welcome.
+Some tools are broadly useful, while others are designed for specific workflows, niche tasks, or unusual edge cases. Each is intended to save time, improve usability, or make tedious and awkward editing tasks easier to manage.
+
+The collection is designed for map creators, builders, technical players, testers, world editors, and anyone who regularly works with Amulet or Minecraft Bedrock Edition. Bug reports, feature requests, testing notes, documentation improvements, and new ideas are welcome.
 
 ## Current Plugins
 
