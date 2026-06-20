@@ -2,6 +2,7 @@ import collections
 import json
 import os
 import weakref
+from time import monotonic
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -21,6 +22,17 @@ CONTROLLER_ATTR_NAME = "_amulet_dark_mode_ui_controller"
 EDITOR_LOAD_ATTEMPT_COUNT = 0
 EDITOR_LOAD_MAX_ATTEMPTS = 40
 EDITOR_LOAD_DELAY_MS = 250
+
+EVENT_RETHEME_DELAY_MS = 120
+
+EVENT_SETTLE_DELAY_MS = 320
+
+ROOT_ACTIVITY_COOLDOWN_MS = 250
+
+SECONDARY_DIALOG_SIZE_COOLDOWN_MS = 120
+
+PLUGIN_CONSOLE_NAME_PREFIX = "AmuletPluginConsole"
+LEGACY_CONSOLE_NAME = "DarkModeUIConsole"
 
 def _config_path() -> Path:
     base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
@@ -127,13 +139,34 @@ def _find_top_window() -> Optional[wx.Window]:
             pass
     return windows[0] if windows else None
 
+def _deactivate_replaced_controller(controller) -> None:
+    if controller is None:
+        return
+    try:
+        controller._theme_active = False
+    except Exception:
+        pass
+    try:
+        controller.watch_new_controls = False
+    except Exception:
+        pass
+    for pending_name in ("_event_retheme_call", "_settle_retheme_call"):
+        try:
+            pending = getattr(controller, pending_name, None)
+            if pending is not None:
+                pending.Stop()
+        except Exception:
+            pass
+
 def _get_controller(top: wx.Window):
+    existing = None
     try:
         existing = getattr(top, CONTROLLER_ATTR_NAME, None)
         if isinstance(existing, DarkModeController):
             return existing
     except Exception:
-        pass
+        existing = None
+    _deactivate_replaced_controller(existing)
     controller = DarkModeController(top)
     try:
         setattr(top, CONTROLLER_ATTR_NAME, controller)
@@ -220,7 +253,17 @@ class DarkModeController:
         self._hover_bound_windows = weakref.WeakSet()
         self._currently_hovered_buttons = weakref.WeakSet()
         self._watch_bound_windows = weakref.WeakSet()
+        self._root_activity_bound_windows = weakref.WeakSet()
+        self._pending_theme_windows = weakref.WeakSet()
+        self._pending_settle_roots = weakref.WeakSet()
+        self._known_target_roots = weakref.WeakSet()
+        self._root_activity_last_queued = {}
+        self._event_retheme_call = None
+        self._settle_retheme_call = None
         self._event_retheme_pending = False
+        self._event_batch_count = 0
+        self._event_window_count = 0
+        self._settle_batch_count = 0
         self._last_event_report = ""
         self._theme_active = False
         self.scope_mode = "top"
@@ -357,14 +400,65 @@ class DarkModeController:
         class_name = self._safe_class_name(window).lower()
         return "button" in class_name or "movebutton" in class_name
 
+    def _is_transient_top_level(self, window: wx.Window) -> bool:
+        transient_types = []
+        for type_name in ("PopupWindow", "PopupTransientWindow", "TipWindow"):
+            window_type = getattr(wx, type_name, None)
+            if window_type is not None:
+                transient_types.append(window_type)
+        try:
+            if transient_types and isinstance(window, tuple(transient_types)):
+                return True
+        except Exception:
+            pass
+        class_name = self._safe_class_name(window).lower()
+        return any(
+            token in class_name
+            for token in ("popupwindow", "popuptransient", "tooltip", "tipwindow")
+        )
+
+    def _is_owned_by_window(
+        self,
+        window: wx.Window,
+        owner: wx.Window,
+    ) -> bool:
+        current = window
+        seen = set()
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            if current is owner:
+                return True
+            current = self._safe_parent(current)
+        return False
+
     def get_targets(self) -> List[wx.Window]:
         owner = self.owner_ref()
+        try:
+            top_levels = [
+                window
+                for window in wx.GetTopLevelWindows()
+                if window is not None and not self._is_transient_top_level(window)
+            ]
+        except Exception:
+            top_levels = []
+
         if self.scope_mode == "all":
-            try:
-                return [window for window in wx.GetTopLevelWindows() if window is not None]
-            except Exception:
-                return [owner] if owner is not None else []
-        return [owner] if owner is not None else []
+            if top_levels:
+                return top_levels
+            return [owner] if owner is not None else []
+
+        if owner is None:
+            return []
+
+        targets = [owner]
+        seen = {id(owner)}
+        for window in top_levels:
+            if id(window) in seen:
+                continue
+            if self._is_owned_by_window(window, owner):
+                targets.append(window)
+                seen.add(id(window))
+        return targets
 
     def walk_windows(self, roots: Iterable[wx.Window], include_hidden: bool, max_depth: Optional[int] = None, max_controls: Optional[int] = None) -> Tuple[List[Tuple[int, wx.Window]], bool]:
         result: List[Tuple[int, wx.Window]] = []
@@ -395,6 +489,136 @@ class DarkModeController:
             walk(root, 0)
         return result, truncated
 
+    def _colors_equal(self, first, second) -> bool:
+        try:
+            if not first or not second or not first.IsOk() or not second.IsOk():
+                return False
+            return (
+                first.Red(),
+                first.Green(),
+                first.Blue(),
+                first.Alpha(),
+            ) == (
+                second.Red(),
+                second.Green(),
+                second.Blue(),
+                second.Alpha(),
+            )
+        except Exception:
+            return False
+
+    def _safe_parent(self, window: wx.Window) -> Optional[wx.Window]:
+        try:
+            return window.GetParent()
+        except Exception:
+            return None
+
+    def _top_level_for_window(self, window: wx.Window) -> Optional[wx.Window]:
+        current = window
+        last = window
+        seen = set()
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            last = current
+            try:
+                if isinstance(current, wx.TopLevelWindow):
+                    return current
+            except Exception:
+                pass
+            current = self._safe_parent(current)
+        return last
+
+    def _is_secondary_top_level(self, window: wx.Window) -> bool:
+        owner = self.owner_ref()
+        try:
+            return (
+                isinstance(window, wx.TopLevelWindow)
+                and window is not owner
+                and not self._is_transient_top_level(window)
+            )
+        except Exception:
+            return False
+
+    def _repaint_secondary_dialog(self, root: wx.Window) -> None:
+        if not self._is_secondary_top_level(root):
+            return
+
+        try:
+            self._remember_original_state(root)
+            bg, fg = self._choose_dark_colors(root)
+
+            root.SetBackgroundColour(bg)
+            root.SetForegroundColour(fg)
+        except Exception:
+            pass
+
+        try:
+            root.Layout()
+        except Exception:
+            pass
+        try:
+
+            root.Refresh(True)
+        except Exception:
+            try:
+                root.Refresh()
+            except Exception:
+                pass
+        try:
+
+            root.Update()
+        except Exception:
+            pass
+
+    def _event_theme_target(self, window: wx.Window) -> wx.Window:
+        root = self._top_level_for_window(window)
+        owner = self.owner_ref()
+        if (
+            root is not None
+            and root is not owner
+            and not self._is_transient_top_level(root)
+        ):
+            return root
+        return window
+
+    def _deduplicate_theme_roots(self, windows: Iterable[wx.Window]) -> List[wx.Window]:
+        unique = []
+        seen = set()
+        for window in windows:
+            if window is None or id(window) in seen:
+                continue
+            try:
+                if window.IsBeingDeleted():
+                    continue
+            except Exception:
+                pass
+            seen.add(id(window))
+            unique.append(window)
+
+        unique_ids = {id(window) for window in unique}
+        roots = []
+        for window in unique:
+
+            try:
+                if isinstance(window, wx.TopLevelWindow):
+                    roots.append(window)
+                    continue
+            except Exception:
+                pass
+
+            parent = self._safe_parent(window)
+            has_queued_ancestor = False
+            visited = set()
+            while parent is not None and id(parent) not in visited:
+                visited.add(id(parent))
+                if id(parent) in unique_ids:
+                    has_queued_ancestor = True
+                    break
+                parent = self._safe_parent(parent)
+            if not has_queued_ancestor:
+                roots.append(window)
+        return roots
+
     def _remember_original_state(self, window: wx.Window) -> None:
         try:
             if window not in self._original_colors:
@@ -416,26 +640,40 @@ class DarkModeController:
         except Exception:
             pass
 
-    def _set_window_colors(self, window: wx.Window, bg: wx.Colour, fg: wx.Colour) -> Tuple[bool, str]:
+    def _set_window_colors(
+        self,
+        window: wx.Window,
+        bg: wx.Colour,
+        fg: wx.Colour,
+    ) -> Tuple[bool, str, bool]:
         self._remember_original_state(window)
         errors = []
-        ok = False
-        try:
-            window.SetBackgroundColour(bg)
-            ok = True
-        except Exception as exc:
-            errors.append(f"bg:{exc}")
-        try:
-            window.SetForegroundColour(fg)
-            ok = True
-        except Exception as exc:
-            errors.append(f"fg:{exc}")
-        try:
-            window.Refresh()
-            window.Update()
-        except Exception:
-            pass
-        return ok, "; ".join(errors)
+        changed = False
+
+        current_bg = self._safe_get_bg(window)
+        if not self._colors_equal(current_bg, bg):
+            try:
+                window.SetBackgroundColour(bg)
+                changed = True
+            except Exception as exc:
+                errors.append(f"bg:{exc}")
+
+        current_fg = self._safe_get_fg(window)
+        if not self._colors_equal(current_fg, fg):
+            try:
+                window.SetForegroundColour(fg)
+                changed = True
+            except Exception as exc:
+                errors.append(f"fg:{exc}")
+
+        if changed:
+            try:
+
+                window.Refresh(False)
+            except Exception:
+                pass
+
+        return not errors, "; ".join(errors), changed
 
     def _is_static_text_like(self, window: wx.Window) -> bool:
         try:
@@ -456,7 +694,12 @@ class DarkModeController:
 
     def _is_dark_mode_console(self, window: wx.Window) -> bool:
         try:
-            return window.GetName() == "DarkModeUIConsole"
+            name = str(window.GetName() or "")
+            return (
+                name == LEGACY_CONSOLE_NAME
+                or name == PLUGIN_CONSOLE_NAME_PREFIX
+                or name.startswith(PLUGIN_CONSOLE_NAME_PREFIX + ":")
+            )
         except Exception:
             return False
 
@@ -627,9 +870,15 @@ class DarkModeController:
                 return
             try:
                 self._currently_hovered_buttons.add(window)
-                window.SetForegroundColour(self.DARK_BUTTON_FORCED_LIGHT_HOVER_TEXT)
-                window.Refresh()
-                window.Update()
+                current = self._safe_get_fg(window)
+                if not self._colors_equal(
+                    current,
+                    self.DARK_BUTTON_FORCED_LIGHT_HOVER_TEXT,
+                ):
+                    window.SetForegroundColour(
+                        self.DARK_BUTTON_FORCED_LIGHT_HOVER_TEXT
+                    )
+                    window.Refresh(False)
             except Exception:
                 pass
             try:
@@ -653,10 +902,7 @@ class DarkModeController:
                     bg, fg = self.DARK_BITMAP_BUTTON_BG, self.DARK_BUTTON_NORMAL_TEXT
                 else:
                     bg, fg = self.DARK_BUTTON_BG, self.DARK_BUTTON_NORMAL_TEXT
-                window.SetBackgroundColour(bg)
-                window.SetForegroundColour(fg)
-                window.Refresh()
-                window.Update()
+                self._set_window_colors(window, bg, fg)
             except Exception:
                 pass
             try:
@@ -670,11 +916,24 @@ class DarkModeController:
         except Exception:
             pass
 
-    def apply(self, quiet: bool = False, from_watcher: bool = False) -> Dict[str, object]:
+    def apply(
+        self,
+        quiet: bool = False,
+        from_watcher: bool = False,
+        roots_override: Optional[Iterable[wx.Window]] = None,
+    ) -> Dict[str, object]:
         self._theme_active = True
-        roots = self.get_targets()
+        roots = (
+            self._deduplicate_theme_roots(roots_override)
+            if roots_override is not None
+            else self.get_targets()
+        )
+        roots = [root for root in roots if root is not None]
+
         controls, truncated = self.walk_windows(roots, include_hidden=False)
-        themed = skipped = failed = flatnotebook_touched = 0
+        themed = changed = unchanged = skipped = failed = 0
+        flatnotebook_touched = 0
+
         for _depth, window in controls:
             if self.skip_canvas and self._looks_like_canvas(window):
                 skipped += 1
@@ -685,94 +944,343 @@ class DarkModeController:
                     continue
             except Exception:
                 pass
+
             self._remember_original_state(window)
             bg, fg = self._choose_dark_colors(window)
-            ok, errors = self._set_window_colors(window, bg, fg)
+            ok, errors, window_changed = self._set_window_colors(window, bg, fg)
             self._bind_button_hover_readability(window)
             if self._apply_flatnotebook_dark(window):
                 flatnotebook_touched += 1
+                window_changed = True
+
             if ok:
                 themed += 1
+                if window_changed:
+                    changed += 1
+                else:
+                    unchanged += 1
             else:
                 failed += 1
                 if not quiet:
-                    self.log(f"Theme failed: {self._safe_class_name(window)} | {errors}")
-        for root in roots:
+                    self.log(
+                        f"Theme failed: {self._safe_class_name(window)} | {errors}"
+                    )
+
+        for _depth, window in controls:
             try:
-                root.Layout()
-                root.Refresh()
+                if isinstance(window, wx.TopLevelWindow):
+                    self._known_target_roots.add(window)
             except Exception:
                 pass
-        if self.watch_new_controls and not from_watcher:
-            self._bind_event_watchers(controls)
-        return {"controls": len(controls), "themed": themed, "skipped": skipped, "failed": failed, "flatnotebook_touched": flatnotebook_touched, "truncated": truncated}
+
+        refresh_roots = self._deduplicate_theme_roots(
+            self._top_level_for_window(root) for root in roots
+        )
+        for root in refresh_roots:
+            if self._is_secondary_top_level(root):
+                self._repaint_secondary_dialog(root)
+                continue
+            if changed or flatnotebook_touched:
+                try:
+                    root.Layout()
+                    root.Refresh(False)
+                except Exception:
+                    pass
+
+        if self.watch_new_controls:
+
+            watch_controls, _watch_truncated = self.walk_windows(
+                roots,
+                include_hidden=True,
+            )
+            self._bind_event_watchers(watch_controls)
+
+        return {
+            "controls": len(controls),
+            "themed": themed,
+            "changed": changed,
+            "unchanged": unchanged,
+            "skipped": skipped,
+            "failed": failed,
+            "flatnotebook_touched": flatnotebook_touched,
+            "truncated": truncated,
+        }
 
     def _bind_event_watchers(self, controls: Iterable[Tuple[int, wx.Window]]) -> None:
         if not self._theme_active or not self.watch_new_controls:
             return
+
+        create_event = getattr(wx, "EVT_WINDOW_CREATE", None)
+        target_root_ids = {id(root) for root in self.get_targets() if root is not None}
+
         for _depth, window in controls:
-            if window is None or (self.skip_canvas and self._looks_like_canvas(window)):
+            if window is None or (
+                self.skip_canvas and self._looks_like_canvas(window)
+            ):
                 continue
+
             try:
-                if window in self._watch_bound_windows:
-                    continue
-                self._watch_bound_windows.add(window)
+                already_bound = window in self._watch_bound_windows
             except Exception:
-                continue
-            for event_type in (wx.EVT_SHOW, wx.EVT_CHILD_FOCUS, wx.EVT_SIZE):
+                already_bound = True
+
+            if not already_bound:
                 try:
-                    window.Bind(event_type, self._on_theme_relevant_event)
+                    self._watch_bound_windows.add(window)
+                except Exception:
+                    continue
+
+                try:
+                    window.Bind(wx.EVT_SHOW, self._on_theme_relevant_event)
                 except Exception:
                     pass
-            try:
-                create_event = getattr(wx, "EVT_WINDOW_CREATE", None)
                 if create_event is not None:
-                    window.Bind(create_event, self._on_theme_relevant_event)
+                    try:
+                        window.Bind(create_event, self._on_theme_relevant_event)
+                    except Exception:
+                        pass
+
+            if id(window) in target_root_ids:
+                try:
+                    root_bound = window in self._root_activity_bound_windows
+                except Exception:
+                    root_bound = True
+                if not root_bound:
+                    try:
+                        self._root_activity_bound_windows.add(window)
+                        window.Bind(wx.EVT_CHILD_FOCUS, self._on_root_activity_event)
+                        activate_event = getattr(wx, "EVT_ACTIVATE", None)
+                        if activate_event is not None:
+                            window.Bind(activate_event, self._on_root_activity_event)
+                        if self._is_secondary_top_level(window):
+                            window.Bind(wx.EVT_SIZE, self._on_root_activity_event)
+                    except Exception:
+                        pass
+
+    def _schedule_settle_retheme(self, window: Optional[wx.Window]) -> None:
+        if window is None or not self._theme_active or not self.watch_new_controls:
+            return
+        root = self._top_level_for_window(window)
+        if root is None or self._is_transient_top_level(root):
+            return
+        try:
+            self._pending_settle_roots.add(root)
+        except Exception:
+            return
+
+        pending = self._settle_retheme_call
+        if pending is not None:
+            try:
+                pending.Stop()
             except Exception:
                 pass
+
+        try:
+            self._settle_retheme_call = wx.CallLater(
+                EVENT_SETTLE_DELAY_MS,
+                self._settle_retheme_once,
+            )
+        except Exception:
+            self._settle_retheme_call = None
+
+    def _on_root_activity_event(self, event) -> None:
+        try:
+            event.Skip()
+        except Exception:
+            pass
+        if not self._theme_active or not self.watch_new_controls:
+            return
+
+        window = self._event_window(event)
+        root = self._top_level_for_window(window) if window is not None else None
+        if root is None:
+            try:
+                event_object = event.GetEventObject()
+                if isinstance(event_object, wx.Window):
+                    root = self._top_level_for_window(event_object)
+            except Exception:
+                root = None
+        if root is None:
+            return
+
+        now = monotonic()
+        marker = id(root)
+        previous = self._root_activity_last_queued.get(marker, 0.0)
+        cooldown_ms = (
+            SECONDARY_DIALOG_SIZE_COOLDOWN_MS
+            if self._is_secondary_top_level(root)
+            else ROOT_ACTIVITY_COOLDOWN_MS
+        )
+        if (now - previous) * 1000.0 < cooldown_ms:
+            return
+        self._root_activity_last_queued[marker] = now
+        self._schedule_settle_retheme(root)
+
+    def _event_window(self, event) -> Optional[wx.Window]:
+        for method_name in ("GetWindow", "GetEventObject"):
+            try:
+                method = getattr(event, method_name, None)
+                window = method() if method is not None else None
+                if isinstance(window, wx.Window):
+                    return window
+            except Exception:
+                pass
+        return None
+
+    def _unseen_target_roots(self) -> List[wx.Window]:
+        unseen = []
+        for root in self.get_targets():
+            try:
+                if root in self._known_target_roots:
+                    continue
+            except Exception:
+                pass
+            unseen.append(root)
+        return unseen
 
     def _on_theme_relevant_event(self, event) -> None:
         try:
             event.Skip()
         except Exception:
             pass
-        if not self._theme_active or not self.watch_new_controls or self._event_retheme_pending:
+
+        if not self._theme_active or not self.watch_new_controls:
             return
+
+        try:
+            if isinstance(event, wx.ShowEvent) and not event.IsShown():
+                return
+        except Exception:
+            pass
+
+        window = self._event_window(event)
+        if window is not None:
+            if self.skip_canvas and self._looks_like_canvas(window):
+                return
+            target = self._event_theme_target(window)
+            try:
+                self._pending_theme_windows.add(target)
+            except Exception:
+                pass
+
+            self._schedule_settle_retheme(target)
+
+        if self._event_retheme_pending:
+            return
+
         self._event_retheme_pending = True
         try:
-            wx.CallLater(120, self._event_retheme_once)
+            self._event_retheme_call = wx.CallLater(
+                EVENT_RETHEME_DELAY_MS,
+                self._event_retheme_once,
+            )
         except Exception:
+            self._event_retheme_call = None
             self._event_retheme_pending = False
 
     def _event_retheme_once(self) -> None:
+        self._event_retheme_call = None
         self._event_retheme_pending = False
         if not self._theme_active:
             return
+
+        pending = list(self._pending_theme_windows)
         try:
-            result = self.apply(quiet=True, from_watcher=True)
-            report = f"Event themed={result['themed']}, skipped={result['skipped']}, failed={result['failed']}, controls={result['controls']}"
-            if report != self._last_event_report:
-                self._last_event_report = report
-                self.log(report)
+            self._pending_theme_windows.clear()
+        except Exception:
+            self._pending_theme_windows = weakref.WeakSet()
+
+        pending.extend(self._unseen_target_roots())
+
+        roots = self._deduplicate_theme_roots(pending)
+        if not roots:
+            return
+
+        try:
+            result = self.apply(
+                quiet=True,
+                from_watcher=True,
+                roots_override=roots,
+            )
+            self._event_batch_count += 1
+            self._event_window_count += len(roots)
+
+            if result["changed"] or result["failed"]:
+                report = (
+                    f"Event changed={result['changed']}, "
+                    f"unchanged={result['unchanged']}, "
+                    f"skipped={result['skipped']}, "
+                    f"failed={result['failed']}, "
+                    f"controls={result['controls']}"
+                )
+                if report != self._last_event_report:
+                    self._last_event_report = report
+                    self.log(report)
         except Exception as exc:
             self.log(f"Event re-theme failed: {exc}")
+
+    def _settle_retheme_once(self) -> None:
+        self._settle_retheme_call = None
+        if not self._theme_active or not self.watch_new_controls:
+            return
+
+        pending = list(self._pending_settle_roots)
+        try:
+            self._pending_settle_roots.clear()
+        except Exception:
+            self._pending_settle_roots = weakref.WeakSet()
+
+        pending.extend(self._unseen_target_roots())
+        roots = self._deduplicate_theme_roots(pending)
+        if not roots:
+            return
+
+        try:
+            result = self.apply(
+                quiet=True,
+                from_watcher=True,
+                roots_override=roots,
+            )
+            self._settle_batch_count += 1
+            if result["changed"] or result["failed"]:
+                report = (
+                    f"Settle changed={result['changed']}, "
+                    f"unchanged={result['unchanged']}, "
+                    f"skipped={result['skipped']}, "
+                    f"failed={result['failed']}, "
+                    f"controls={result['controls']}"
+                )
+                if report != self._last_event_report:
+                    self._last_event_report = report
+                    self.log(report)
+        except Exception as exc:
+            self.log(f"Settle re-theme failed: {exc}")
 
     def restore(self) -> Dict[str, int]:
         self._theme_active = False
         self._event_retheme_pending = False
+        for call_name in ("_event_retheme_call", "_settle_retheme_call"):
+            pending_call = getattr(self, call_name, None)
+            setattr(self, call_name, None)
+            if pending_call is not None:
+                try:
+                    pending_call.Stop()
+                except Exception:
+                    pass
         try:
             self._currently_hovered_buttons.clear()
-            self._watch_bound_windows.clear()
+            self._pending_theme_windows.clear()
+            self._pending_settle_roots.clear()
         except Exception:
             pass
+
         restored = failed = 0
         for window, colors in list(self._original_colors.items()):
             try:
                 bg, fg = colors
                 window.SetBackgroundColour(bg)
                 window.SetForegroundColour(fg)
-                window.Refresh()
-                window.Update()
+                window.Refresh(False)
                 restored += 1
             except Exception:
                 failed += 1
@@ -817,6 +1325,13 @@ class DarkModeController:
             f"Saved original colors: {len(list(self._original_colors.items()))}",
             f"Hover-bound buttons: {len(list(self._hover_bound_windows))}",
             f"Watch-bound windows: {len(list(self._watch_bound_windows))}",
+            f"Root activity / dialog-size watchers: {len(list(self._root_activity_bound_windows))}",
+            f"Known target roots: {len(list(self._known_target_roots))}",
+            f"Queued event windows: {len(list(self._pending_theme_windows))}",
+            f"Queued settle roots: {len(list(self._pending_settle_roots))}",
+            f"Incremental event batches: {self._event_batch_count}",
+            f"Incremental event roots themed: {self._event_window_count}",
+            f"Settle passes: {self._settle_batch_count}",
             f"Config path: {_display_path(_config_path())}",
             f"Apply when editor loads: {bool(_load_config().get('enabled_on_editor_load', False))}",
             f"Preserve selection value colors: {self.preserve_selection_colors}",
@@ -934,7 +1449,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._sizer.Add(button_grid, 0, wx.ALL | wx.EXPAND, 6)
 
         self.text = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL, size=(-1, 520))
-        self.text.SetName("DarkModeUIConsole")
+
+        self.text.SetName(f"{PLUGIN_CONSOLE_NAME_PREFIX}:DarkModeUI")
         self.text.SetMinSize((360, 360))
         self.text.SetForegroundColour(wx.Colour(0, 255, 0))
         self.text.SetBackgroundColour(wx.Colour(0, 0, 0))
@@ -948,12 +1464,14 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     def _get_controller(self) -> DarkModeController:
         top = self.GetTopLevelParent()
+        existing = None
         try:
             existing = getattr(top, CONTROLLER_ATTR_NAME, None)
             if isinstance(existing, DarkModeController):
                 return existing
         except Exception:
-            pass
+            existing = None
+        _deactivate_replaced_controller(existing)
         controller = DarkModeController(top)
         try:
             setattr(top, CONTROLLER_ATTR_NAME, controller)
@@ -997,7 +1515,11 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     def _set_tooltips(self) -> None:
         self._set_tooltip(self.scope_choice, "Targets this Amulet window, or all top-level wx windows such as World Select.")
         self._set_tooltip(self.apply_on_editor_load, "Automatically applies dark mode when Amulet loads the editor / plugin system. This is not true app-start theming in the installed PyInstaller build.")
-        self._set_tooltip(self.watch_new_controls, "Event-based watcher that re-themes newly shown panels without a constant timer.")
+        self._set_tooltip(
+            self.watch_new_controls,
+            "Event-based watcher that themes only newly created or shown controls. "
+            "It does not monitor ordinary focus or resize events and uses no constant timer.",
+        )
         self._set_tooltip(self.skip_canvas, "Skips OpenGL / canvas-like controls to avoid disturbing the 3D viewport.")
         self._set_tooltip(self.button_hover_safe, "Improves readability when Windows forces a light hover state on native buttons.")
         self._set_tooltip(self.preserve_selection_colors, "Keeps the actual Amulet selection value fields and Move Point buttons green / purple / gray instead of making them normal dark inputs.")
@@ -1100,7 +1622,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 result = self.controller.apply(quiet=True)
                 self._log(
                     "Updated dark mode settings: "
-                    f"themed={result['themed']}, skipped={result['skipped']}, "
+                    f"changed={result['changed']}, "
+                    f"unchanged={result['unchanged']}, "
+                    f"skipped={result['skipped']}, "
                     f"failed={result['failed']}, controls={result['controls']}"
                 )
         except Exception as exc:
@@ -1112,7 +1636,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         result = self.controller.apply(quiet=False)
         self._save_current_config(enabled_on_editor_load=bool(self.apply_on_editor_load.GetValue()))
         self._log(f"Controls considered: {result['controls']}")
-        self._log(f"Themed: {result['themed']}")
+        self._log(f"Controls matching theme: {result['themed']}")
+        self._log(f"Colors changed: {result['changed']}")
+        self._log(f"Already correct: {result['unchanged']}")
         self._log(f"Skipped: {result['skipped']}")
         self._log(f"Failed: {result['failed']}")
         self._log(f"Notebook extra styling attempts: {result['flatnotebook_touched']}")
