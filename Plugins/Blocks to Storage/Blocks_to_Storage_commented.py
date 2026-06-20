@@ -2,28 +2,35 @@
 
 Purpose:
 - Scan the selected Bedrock world area.
-- Count exportable non-air blocks.
+- Count exportable source blocks and resulting inventory items.
 - Clear selected blocks while preserving protected blocks such as bedrock.
-- Place the collected blocks into chests, double chests, barrels or shulker boxes.
-- Optionally separate block groups, add spacing, label groups with item frames,
+- Place the collected items into chests, double chests, barrels or shulker boxes.
+- Optionally separate item groups, add spacing, label groups with item frames,
   and pack large exports into nested shulker boxes.
 
 Navigation:
 1. Imports and optional NBT compatibility
-2. Constants and block exclusion lists
-3. UI setup and tooltips
-4. Warning, logging and report helpers
-5. Selection and direction helpers
-6. Block, inventory and NBT helpers
-7. Item packing
-8. Chunk read / write helpers
-9. Scan, clear, layout and placement logic
-10. Item frame placement
-11. Main Amulet operation wrapper"""
+2. Core constants, conversion tables and embedded display names
+3. UI setup, collapsible settings and tooltips
+4. Scan-identity recovery and UI state helpers
+5. Warning, logging, report, selection and direction helpers
+6. Block conversion, inventory and NBT helpers
+7. Display-name data, settings and managed-file helpers
+8. Conversion rules and Amulet diagnostics
+9. Installed language fallback and ABC ordering
+10. Item packing
+11. Chunk read / write helpers
+12. Scan, clear, layout and placement logic
+13. Item frame placement
+14. Main Amulet operation wrapper and export registration"""
 
+import ast
 import collections
+import inspect
+import json
 import os
 import re
+import stat
 import tempfile
 import time
 from pathlib import Path
@@ -36,6 +43,12 @@ from amulet_map_editor.programs.edit.api.operations import DefaultOperationUI
 
 from amulet.api.block import Block
 from amulet.api.block_entity import BlockEntity
+
+try:
+    from amulet.api.item import Item, BlockItem
+except Exception:  # pragma: no cover
+    Item = None
+    BlockItem = None
 
 try:
     from amulet_nbt import (
@@ -67,7 +80,7 @@ if TYPE_CHECKING:
 
 class PluginClassName(wx.Panel, DefaultOperationUI):
     """
-    Main UI and operation class for converting selected blocks into storage containers.
+    Main UI and operation class for converting selected blocks into stored items.
     """
     # Minecraft inventory sizing used by the packer.
     SINGLE_CONTAINER_SLOT_COUNT = 27
@@ -86,6 +99,62 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     SETTINGS_PANEL_MAX_HEIGHT = 620
 
     FOUND_ENTRIES_FILENAME = "Found Entries.BTSP"
+    CONVERSION_ENTRIES_FILENAME = "Conversion Entries.BTSP"
+    CONVERSION_CANDIDATES_FILENAME = "Conversion Candidates.BTSP"
+    BUILT_IN_INTEGRATED_SOURCE_LABEL = "Built-in integrated entry"
+    INSTALLED_LANGUAGE_SOURCE_LABEL = "Installed en_US.lang"
+    SETTINGS_CONFIG_FILENAME = "Blocks to Storage.config"
+    SETTINGS_CONFIG_FORMAT_VERSION = 1
+    SETTINGS_SAVE_DELAY_MS = 500
+    MAX_SETTINGS_CONFIG_BYTES = 1024 * 1024
+
+    # Dark Mode UI recognizes this shared semantic name and preserves the
+    # report console's intended black background and green text palette.
+    CONSOLE_SEMANTIC_NAME = "AmuletPluginConsole:BlocksToStorage"
+    MAX_CONVERSION_CANDIDATES_FILE_BYTES = 1024 * 1024
+    MAX_CONVERSION_CANDIDATES = 5000
+    MAX_CONVERSION_ENTRIES_FILE_BYTES = 1024 * 1024
+    MAX_CONVERSION_ENTRIES = 5000
+    MAX_CONVERSION_DIAGNOSTIC_DETAILS = 20
+    MAX_CONVERSION_DIAGNOSTIC_TEXT_LENGTH = 160
+    MAX_AMULET_CONVERSION_AUDIT_ENTRIES = 100
+    MAX_AMULET_CONVERSION_AUDIT_OMITTED_IDENTITIES = 5000
+    MAX_FOUND_ENTRY_SCAN_IDENTITY_DETAILS = 20
+
+    # The plugin remains the final conversion authority. Only explicitly
+    # reviewed and tested Amulet-assisted fallbacks may affect unresolved
+    # generic identities. New candidates remain report-only until approved.
+    REVIEWED_AMULET_NORMALIZATIONS = {
+        "minecraft:plant": "minecraft:short_grass",
+    }
+
+    # Normal candidate recording omits generic families already handled by
+    # tested built-in state-aware resolvers. Advanced diagnostics can opt into
+    # recording every resolved observation when exhaustive data is useful.
+    BUILT_IN_RESOLVED_CANDIDATE_SOURCES = {
+        "minecraft:coral",
+        "minecraft:coral_fan",
+        "minecraft:coral_fan_dead",
+        "minecraft:coral_fan_hang",
+        "minecraft:coral_fan_hang2",
+        "minecraft:coral_fan_hang3",
+        "minecraft:door",
+        "minecraft:double_plant",
+        "minecraft:fence",
+        "minecraft:glazed_terracotta",
+        "minecraft:leaves",
+        "minecraft:leaves2",
+        "minecraft:log",
+        "minecraft:log2",
+        "minecraft:planks",
+        "minecraft:sapling",
+        "minecraft:slab",
+        "minecraft:stained_terracotta",
+        "minecraft:stairs",
+        "minecraft:wall",
+        "minecraft:wood",
+    }
+
     DEFAULT_MINECRAFT_LANGUAGE_RELATIVE_PATH = Path(
         "XboxGames",
         "Minecraft for Windows",
@@ -149,6 +218,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     # safer Amulet translation call only for these specific blocks.
     AMBIGUOUS_FAST_SCAN_BLOCKS = {
         "minecraft:plant",
+        "minecraft:sapling",
         "minecraft:double_plant",
         "minecraft:leaves",
         "minecraft:leaves2",
@@ -253,6 +323,12 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:bars",
         "minecraft:stonecutter_old",
         "minecraft:stonecutter_block",
+        "minecraft:coral",
+        "minecraft:coral_fan",
+        "minecraft:coral_fan_dead",
+        "minecraft:coral_fan_hang",
+        "minecraft:coral_fan_hang2",
+        "minecraft:coral_fan_hang3",
         "minecraft:button",
         "minecraft:pressure_plate",
         "minecraft:trapdoor",
@@ -317,6 +393,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:stonecutter_block",
         "minecraft:fence_gate",
         "minecraft:trapdoor",
+        "minecraft:magma",
     }
 
     # State-sensitive blocks are re-read with the safer Amulet lookup so the
@@ -411,6 +488,12 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:stained_glass",
         "minecraft:stained_glass_pane",
         "minecraft:coral_block",
+        "minecraft:coral",
+        "minecraft:coral_fan",
+        "minecraft:coral_fan_dead",
+        "minecraft:coral_fan_hang",
+        "minecraft:coral_fan_hang2",
+        "minecraft:coral_fan_hang3",
         "minecraft:button",
         "minecraft:pressure_plate",
         "minecraft:trapdoor",
@@ -429,8 +512,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:wooden_slab",
         "minecraft:double_wooden_slab",
         "minecraft:stairs",
-        "minecraft:magma",
         "minecraft:plant",
+        "minecraft:sapling",
         "minecraft:double_plant",
         "minecraft:leaves",
         "minecraft:leaves2",
@@ -452,6 +535,12 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:wall",
         "minecraft:door",
         "minecraft:glazed_terracotta",
+        "minecraft:coral",
+        "minecraft:coral_fan",
+        "minecraft:coral_fan_dead",
+        "minecraft:coral_fan_hang",
+        "minecraft:coral_fan_hang2",
+        "minecraft:coral_fan_hang3",
     }
 
     # Some Bedrock block names need to be corrected before they are written
@@ -460,6 +549,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     ITEM_NAME_OVERRIDES = {
         "minecraft:fire_fly_bush": "minecraft:firefly_bush",
         "minecraft:small_dripleaf": "minecraft:small_dripleaf_block",
+        "minecraft:bamboo_sapling": "minecraft:bamboo",
         "minecraft:item_frame_block": "minecraft:frame",
         "minecraft:stonecutter": "minecraft:stonecutter_block",
         "minecraft:stonecutter_old": "minecraft:stonecutter_block",
@@ -633,12 +723,17 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         color_name: f"minecraft:{color_name}_stained_glass_pane" for color_name in BED_COLOR_NAMES
     }
 
-    CORAL_BLOCK_TYPES = {
-        "tube",
-        "brain",
-        "bubble",
-        "fire",
-        "horn",
+    CORAL_TYPE_ALIASES = {
+        "blue": "tube",
+        "pink": "brain",
+        "purple": "bubble",
+        "red": "fire",
+        "yellow": "horn",
+        "tube": "tube",
+        "brain": "brain",
+        "bubble": "bubble",
+        "fire": "fire",
+        "horn": "horn",
     }
 
     TERRACOTTA_ITEM_BY_COLOR = {
@@ -664,6 +759,16 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "prismarine": "minecraft:prismarine_wall",
         "red_sandstone": "minecraft:red_sandstone_wall",
         "red_nether_brick": "minecraft:red_nether_brick_wall",
+    }
+
+    SAPLING_ITEM_BY_TYPE = {
+        "oak": "minecraft:oak_sapling",
+        "spruce": "minecraft:spruce_sapling",
+        "birch": "minecraft:birch_sapling",
+        "jungle": "minecraft:jungle_sapling",
+        "acacia": "minecraft:acacia_sapling",
+        "dark_oak": "minecraft:dark_oak_sapling",
+        "big_oak": "minecraft:dark_oak_sapling",
     }
 
     DOOR_ITEM_BY_TYPE = {
@@ -731,6 +836,46 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "lightgrey": "light_gray",
         "light_grey": "light_gray",
         "grey": "gray",
+    }
+
+    # Some valid Bedrock items still use grouped or legacy language keys rather
+    # than a direct ``tile.<item>.name`` entry. These aliases are display-name
+    # lookup hints only. They never change conversion, item identifiers, damage,
+    # NBT, storage contents or item-frame data.
+    LEGACY_DISPLAY_NAME_ALIASES = {
+        "acacia_slab": ("wooden_slab_acacia",),
+        "andesite_slab": ("stone_slab3_andesite",),
+        "birch_slab": ("wooden_slab_birch",),
+        "brick_slab": ("stone_slab_brick",),
+        "cobblestone_slab": ("stone_slab_cobble",),
+        "cut_red_sandstone_slab": ("stone_slab4_cut_red_sandstone",),
+        "cut_sandstone_slab": ("stone_slab4_cut_sandstone",),
+        "dark_oak_slab": ("wooden_slab_big_oak",),
+        "dark_prismarine_slab": ("stone_slab2_prismarine_dark",),
+        "diorite_slab": ("stone_slab3_diorite",),
+        "end_stone_brick_slab": ("stone_slab3_end_brick",),
+        "granite_slab": ("stone_slab3_granite",),
+        "jungle_slab": ("wooden_slab_jungle",),
+        "mossy_cobblestone_slab": ("stone_slab2_mossy_cobblestone",),
+        "mossy_stone_brick_slab": ("stone_slab4_mossy_stone_brick",),
+        "nether_brick_slab": ("stone_slab_nether_brick",),
+        "oak_slab": ("wooden_slab_oak",),
+        "polished_andesite_slab": ("stone_slab3_andesite_smooth",),
+        "polished_diorite_slab": ("stone_slab3_diorite_smooth",),
+        "polished_granite_slab": ("stone_slab3_granite_smooth",),
+        "prismarine_brick_slab": ("stone_slab2_prismarine_bricks",),
+        "prismarine_slab": ("stone_slab2_prismarine_rough",),
+        "purpur_slab": ("stone_slab2_purpur",),
+        "quartz_slab": ("stone_slab_quartz",),
+        "red_nether_brick_slab": ("stone_slab2_red_nether_brick",),
+        "red_sandstone_slab": ("stone_slab2_red_sandstone",),
+        "sandstone_slab": ("stone_slab_sand",),
+        "smooth_quartz_slab": ("stone_slab4_smooth_quartz",),
+        "smooth_red_sandstone_slab": ("stone_slab3_red_sandstone_smooth",),
+        "smooth_sandstone_slab": ("stone_slab2_sandstone_smooth",),
+        "smooth_stone_slab": ("stone_slab_stone",),
+        "spruce_slab": ("wooden_slab_spruce",),
+        "stone_brick_slab": ("stone_slab_smooth_stone_brick",),
     }
 
     BANNER_ITEM_PREFIX = "minecraft:banner_damage_"
@@ -2582,6 +2727,163 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
  'yellow_flower_dandelion': ('tile.yellow_flower.dandelion.name', 'Dandelion'),
  'yellow_harness': ('item.yellow_harness.name', 'Yellow Harness')}
 
+    # Newer Bedrock sulfur and cinnabar block names verified from the
+    # installed en_US.lang file and runtime-tested across direct blocks,
+    # slabs, double slabs, stairs and walls. These embedded names support
+    # ABC sorting and conservative identity recovery without requiring
+    # Found Entries.BTSP or an installed language-file fallback. Entity
+    # bucket and spawn-egg entries are excluded because this operation
+    # exports selected world blocks.
+    INTEGRATED_SCAN_IDENTITY_DISPLAY_NAMES = {
+        "chiseled_cinnabar": (
+            "tile.chiseled_cinnabar.name",
+            "Chiseled Cinnabar",
+        ),
+        "chiseled_sulfur": (
+            "tile.chiseled_sulfur.name",
+            "Chiseled Sulfur",
+        ),
+        "cinnabar": (
+            "tile.cinnabar.name",
+            "Cinnabar",
+        ),
+        "cinnabar_brick_double_slab": (
+            "tile.cinnabar_brick_double_slab.name",
+            "Cinnabar Brick Double Slab",
+        ),
+        "cinnabar_brick_slab": (
+            "tile.cinnabar_brick_slab.name",
+            "Cinnabar Brick Slab",
+        ),
+        "cinnabar_brick_stairs": (
+            "tile.cinnabar_brick_stairs.name",
+            "Cinnabar Brick Stairs",
+        ),
+        "cinnabar_brick_wall": (
+            "tile.cinnabar_brick_wall.name",
+            "Cinnabar Brick Wall",
+        ),
+        "cinnabar_bricks": (
+            "tile.cinnabar_bricks.name",
+            "Cinnabar Bricks",
+        ),
+        "cinnabar_double_slab": (
+            "tile.cinnabar_double_slab.name",
+            "Cinnabar Double Slab",
+        ),
+        "cinnabar_slab": (
+            "tile.cinnabar_slab.name",
+            "Cinnabar Slab",
+        ),
+        "cinnabar_stairs": (
+            "tile.cinnabar_stairs.name",
+            "Cinnabar Stairs",
+        ),
+        "cinnabar_wall": (
+            "tile.cinnabar_wall.name",
+            "Cinnabar Wall",
+        ),
+        "polished_cinnabar": (
+            "tile.polished_cinnabar.name",
+            "Polished Cinnabar",
+        ),
+        "polished_cinnabar_double_slab": (
+            "tile.polished_cinnabar_double_slab.name",
+            "Polished Cinnabar Double Slab",
+        ),
+        "polished_cinnabar_slab": (
+            "tile.polished_cinnabar_slab.name",
+            "Polished Cinnabar Slab",
+        ),
+        "polished_cinnabar_stairs": (
+            "tile.polished_cinnabar_stairs.name",
+            "Polished Cinnabar Stairs",
+        ),
+        "polished_cinnabar_wall": (
+            "tile.polished_cinnabar_wall.name",
+            "Polished Cinnabar Wall",
+        ),
+        "polished_sulfur": (
+            "tile.polished_sulfur.name",
+            "Polished Sulfur",
+        ),
+        "polished_sulfur_double_slab": (
+            "tile.polished_sulfur_double_slab.name",
+            "Polished Sulfur Double Slab",
+        ),
+        "polished_sulfur_slab": (
+            "tile.polished_sulfur_slab.name",
+            "Polished Sulfur Slab",
+        ),
+        "polished_sulfur_stairs": (
+            "tile.polished_sulfur_stairs.name",
+            "Polished Sulfur Stairs",
+        ),
+        "polished_sulfur_wall": (
+            "tile.polished_sulfur_wall.name",
+            "Polished Sulfur Wall",
+        ),
+        "potent_sulfur": (
+            "tile.potent_sulfur.name",
+            "Potent Sulfur",
+        ),
+        "sulfur": (
+            "tile.sulfur.name",
+            "Sulfur",
+        ),
+        "sulfur_brick_double_slab": (
+            "tile.sulfur_brick_double_slab.name",
+            "Sulfur Brick Double Slab",
+        ),
+        "sulfur_brick_slab": (
+            "tile.sulfur_brick_slab.name",
+            "Sulfur Brick Slab",
+        ),
+        "sulfur_brick_stairs": (
+            "tile.sulfur_brick_stairs.name",
+            "Sulfur Brick Stairs",
+        ),
+        "sulfur_brick_wall": (
+            "tile.sulfur_brick_wall.name",
+            "Sulfur Brick Wall",
+        ),
+        "sulfur_bricks": (
+            "tile.sulfur_bricks.name",
+            "Sulfur Bricks",
+        ),
+        "sulfur_double_slab": (
+            "tile.sulfur_double_slab.name",
+            "Sulfur Double Slab",
+        ),
+        "sulfur_slab": (
+            "tile.sulfur_slab.name",
+            "Sulfur Slab",
+        ),
+        "sulfur_spike": (
+            "tile.sulfur_spike.name",
+            "Sulfur Spike",
+        ),
+        "sulfur_stairs": (
+            "tile.sulfur_stairs.name",
+            "Sulfur Stairs",
+        ),
+        "sulfur_wall": (
+            "tile.sulfur_wall.name",
+            "Sulfur Wall",
+        ),
+    }
+
+    BEDROCK_EN_US_DISPLAY_NAMES.update(
+        INTEGRATED_SCAN_IDENTITY_DISPLAY_NAMES
+    )
+
+    # Only explicitly verified aliases may use embedded display-name data
+    # as state-aware identity evidence. Deriving the allowlist from the
+    # integrated table prevents the two collections from drifting apart.
+    INTEGRATED_SCAN_IDENTITY_BLOCK_ALIASES = frozenset(
+        INTEGRATED_SCAN_IDENTITY_DISPLAY_NAMES
+    )
+
     # Names listed here are excluded from automatic language-based sorting
     # and audit conclusions until their Bedrock inventory identities are
     # verified directly.
@@ -2788,9 +3090,12 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._fast_clear_failed = False
         self._fast_clear_fail_reason = ""
         self._ambiguous_fast_scan_fallbacks = 0
+        self._missing_scan_chunks: Set[Tuple[int, int]] = set()
+        self._unresolved_write_attempt_counts = collections.defaultdict(int)
 
-        # External display-name data is loaded lazily and only when the user
-        # enables the installed-language fallback.
+        # External display-name data is loaded lazily when the user enables
+        # the installed-language fallback, Found Entries cache, or the
+        # dedicated pre-operation Found Entries update setting.
         self._external_language_aliases: Dict[str, Tuple[str, str]] = {}
         self._external_language_raw_entries: Dict[str, str] = {}
         self._found_entries_aliases: Dict[str, Tuple[str, str]] = {}
@@ -2804,10 +3109,61 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._pending_found_entries: Dict[str, str] = {}
         self._found_entries_write_error = ""
         self._found_entries_written_count = 0
+        self._found_entries_sync_queued_count = 0
         self._external_language_prepared = False
         self._display_name_resolution_cache: Dict[
             str,
             Optional[Tuple[str, str, str]],
+        ] = {}
+
+        # Plugin-created conversion rules are optional local data. They are
+        # loaded once per operation, applied only after built-in conversion
+        # logic has had priority, and then released with other operation data.
+        self._conversion_entries: Dict[str, str] = {}
+        self._conversion_entries_used: Dict[str, str] = {}
+        self._conversion_entries_skipped: Dict[str, str] = {}
+        self._conversion_entries_skip_reason_counts: Dict[str, int] = {}
+        self._conversion_entries_skip_details: List[str] = []
+        self._conversion_entries_skip_detail_overflow = 0
+        self._conversion_entries_load_error = ""
+        self._conversion_entries_loaded_count = 0
+        self._conversion_entries_prepared = False
+        self._pending_conversion_candidates = collections.defaultdict(int)
+        self._conversion_candidates_written_count = 0
+        self._conversion_candidates_new_record_count = 0
+        self._conversion_candidates_updated_record_count = 0
+        self._conversion_candidate_observations_added_count = 0
+        self._conversion_candidates_existing_record_count = 0
+        self._conversion_candidates_total_record_count = 0
+        self._conversion_candidates_write_error = ""
+
+        # Settings are persisted directly to one JSON-backed config file.
+        # A short debounce avoids excessive writes during rapid UI changes.
+        self._settings_config_save_call = None
+        self._settings_config_applying = False
+        self._settings_config_load_error = ""
+        self._settings_config_write_error = ""
+        self._settings_config_unknown_data = {}
+        self._settings_defaults = {}
+
+        self._amulet_translator_capabilities: Dict[str, Tuple[bool, str]] = {}
+        self._amulet_translator_version_object = None
+        self._amulet_translator_version_source = ""
+        self._amulet_translator_capabilities_prepared = False
+        self._amulet_conversion_audit_entries: Dict[
+            Tuple[str, str], Tuple[str, str, str, str, str, str]
+        ] = {}
+        self._amulet_conversion_audit_buckets: Dict[
+            int, Set[Tuple[str, str]]
+        ] = collections.defaultdict(set)
+        self._amulet_conversion_audit_omitted_identities: Set[
+            Tuple[str, str]
+        ] = set()
+        self._amulet_conversion_audit_omitted_overflow = 0
+        self._reviewed_amulet_normalizations_used = collections.Counter()
+        self._reviewed_amulet_normalization_failures = collections.Counter()
+        self._reviewed_amulet_normalization_cache: Dict[
+            Tuple[str, Tuple[Tuple[str, str], ...]], Optional[str]
         ] = {}
 
         self._configure_tooltips()
@@ -2819,6 +3175,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self.settings_panel.SetMinSize((320, self.SETTINGS_PANEL_MIN_HEIGHT))
         self.settings_panel.SetInitialSize((-1, self.SETTINGS_PANEL_DEFAULT_HEIGHT))
         self.settings_sizer = wx.BoxSizer(wx.VERTICAL)
+        self._collapsible_settings_sections = {}
         self.settings_panel.SetSizer(self.settings_sizer)
         self.Bind(wx.EVT_SIZE, self._on_panel_resized)
 
@@ -2874,13 +3231,17 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         # Export behavior controls what gets collected and how groups are ordered.
         self._add_settings_section("Export behavior")
 
-        self.include_unusual = wx.CheckBox(self.settings_panel, label="Include unusual blocks")
+        self.include_unusual = wx.CheckBox(
+            self.settings_panel,
+            label="Include unusual blocks",
+        )
         self.include_unusual.SetValue(False)
-        self.settings_sizer.Add(self.include_unusual, 0, wx.ALL, 6)
 
-        self.preserve_bedrock = wx.CheckBox(self.settings_panel, label="Preserve bedrock")
+        self.preserve_bedrock = wx.CheckBox(
+            self.settings_panel,
+            label="Preserve bedrock",
+        )
         self.preserve_bedrock.SetValue(True)
-        self.settings_sizer.Add(self.preserve_bedrock, 0, wx.ALL, 6)
 
         self.alphabetical_order = wx.CheckBox(self.settings_panel, label="ABC item order")
         self.alphabetical_order.SetValue(True)
@@ -2889,12 +3250,18 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         # Separated groups keep each item type in its own labeled storage area.
         self._add_settings_section("Separated groups")
 
-        self.separate_types = wx.CheckBox(self.settings_panel, label="One block type per storage group")
+        self.separate_types = wx.CheckBox(
+            self.settings_panel,
+            label="One block type per storage group",
+        )
         self.separate_types.SetValue(False)
         self.separate_types.Bind(wx.EVT_CHECKBOX, self._on_separate_types_changed)
         self.settings_sizer.Add(self.separate_types, 0, wx.ALL, 6)
 
-        self.add_group_item_frames = wx.CheckBox(self.settings_panel, label="Add item frames for separated groups")
+        self.add_group_item_frames = wx.CheckBox(
+            self.settings_panel,
+            label="Add item frames for separated groups",
+        )
         self.add_group_item_frames.SetValue(False)
         self.settings_sizer.Add(self.add_group_item_frames, 0, wx.ALL, 6)
 
@@ -2941,20 +3308,40 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self.nested_shulker_color_row.Add(self.nested_shulker_color_choice, 1)
         self.settings_sizer.Add(self.nested_shulker_color_row, 0, wx.ALL | wx.EXPAND, 6)
 
-        # Performance and safety options affect scan / clear speed and user confirmation.
-        self._add_settings_section("Performance and safety")
+        # Performance controls affect scan and clear speed.
+        performance_sizer = self._add_collapsible_settings_section(
+            "Performance",
+            expanded=True,
+        )
 
-        self.fast_direct_scan = wx.CheckBox(self.settings_panel, label="Fast direct chunk scan")
+        self.fast_direct_scan = wx.CheckBox(
+            self.settings_panel,
+            label="Fast direct chunk scan",
+        )
         self.fast_direct_scan.SetValue(True)
-        self.settings_sizer.Add(self.fast_direct_scan, 0, wx.ALL, 6)
+        performance_sizer.Add(self.fast_direct_scan, 0, wx.ALL, 6)
 
-        self.fast_direct_clear = wx.CheckBox(self.settings_panel, label="Fast direct chunk clear")
+        self.fast_direct_clear = wx.CheckBox(
+            self.settings_panel,
+            label="Fast direct chunk clear",
+        )
         self.fast_direct_clear.SetValue(True)
-        self.settings_sizer.Add(self.fast_direct_clear, 0, wx.ALL, 6)
+        performance_sizer.Add(self.fast_direct_clear, 0, wx.ALL, 6)
 
-        self.show_large_selection_warning = wx.CheckBox(self.settings_panel, label="Show large selection warning")
+        # Safety controls prevent accidental loss or unsupported exports.
+        safety_sizer = self._add_collapsible_settings_section(
+            "Safety",
+            expanded=True,
+        )
+        safety_sizer.Add(self.include_unusual, 0, wx.ALL, 6)
+        safety_sizer.Add(self.preserve_bedrock, 0, wx.ALL, 6)
+
+        self.show_large_selection_warning = wx.CheckBox(
+            self.settings_panel,
+            label="Show large selection warning",
+        )
         self.show_large_selection_warning.SetValue(True)
-        self.settings_sizer.Add(self.show_large_selection_warning, 0, wx.ALL, 6)
+        safety_sizer.Add(self.show_large_selection_warning, 0, wx.ALL, 6)
 
         # Optional display-name data can fill unresolved ABC names from the
         # installed Minecraft Bedrock Edition language file.
@@ -3034,7 +3421,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         self.save_found_language_entries = wx.CheckBox(
             self.settings_panel,
-            label=f"Save newly resolved entries to {self.FOUND_ENTRIES_FILENAME}",
+            label=f"Keep {self.FOUND_ENTRIES_FILENAME} updated from en_US.lang",
         )
         self.save_found_language_entries.SetValue(False)
         self.save_found_language_entries.Bind(
@@ -3087,38 +3474,202 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             6,
         )
 
-        self.delete_display_name_data_button = wx.Button(
+        self.manage_plugin_files_button = wx.Button(
             self.settings_panel,
-            label="Delete plugin-created display-name data...",
+            label="Manage plugin files...",
         )
-        self.delete_display_name_data_button.Bind(
+        self.manage_plugin_files_button.Bind(
             wx.EVT_BUTTON,
-            self._delete_plugin_created_display_name_data,
+            self._manage_plugin_files,
         )
         self.settings_sizer.Add(
-            self.delete_display_name_data_button,
+            self.manage_plugin_files_button,
             0,
             wx.ALL | wx.EXPAND,
             6,
         )
 
+        # Optional conversion data can fill reviewed local block-to-item rules
+        # without making network calls or modifying the plugin source.
+        self._add_settings_section("Conversion data")
+
+        self.use_conversion_entries = wx.CheckBox(
+            self.settings_panel,
+            label=f"Use plugin-created {self.CONVERSION_ENTRIES_FILENAME} rules",
+        )
+        self.use_conversion_entries.SetValue(True)
+        self.settings_sizer.Add(
+            self.use_conversion_entries,
+            0,
+            wx.ALL,
+            6,
+        )
+
         # Debug and diagnostic options add detailed report data without changing
         # block conversion, storage contents, item frames or placement behavior.
-        self._add_settings_section("Debug and diagnostics")
+        diagnostics_sizer = self._add_collapsible_settings_section(
+            "Debug and Diagnostics",
+            expanded=False,
+        )
 
         self.include_item_frame_audit = wx.CheckBox(
             self.settings_panel,
             label="Include item frame label audit in report",
         )
         self.include_item_frame_audit.SetValue(False)
-        self.settings_sizer.Add(self.include_item_frame_audit, 0, wx.ALL, 6)
+        diagnostics_sizer.Add(self.include_item_frame_audit, 0, wx.ALL, 6)
 
         self.include_display_name_audit = wx.CheckBox(
             self.settings_panel,
             label="Include display-name ABC audit in report",
         )
         self.include_display_name_audit.SetValue(False)
-        self.settings_sizer.Add(self.include_display_name_audit, 0, wx.ALL, 6)
+        diagnostics_sizer.Add(self.include_display_name_audit, 0, wx.ALL, 6)
+
+        advanced_diagnostics_sizer = self._add_collapsible_settings_section(
+            "Advanced Diagnostics",
+            expanded=False,
+            parent_sizer=diagnostics_sizer,
+        )
+
+        self.include_amulet_conversion_diagnostic = wx.CheckBox(
+            self.settings_panel,
+            label="Include Amulet conversion capability diagnostic in report",
+        )
+        self.include_amulet_conversion_diagnostic.SetValue(False)
+        advanced_diagnostics_sizer.Add(
+            self.include_amulet_conversion_diagnostic,
+            0,
+            wx.ALL,
+            6,
+        )
+        self._set_tooltip(
+            self.include_amulet_conversion_diagnostic,
+            "Adds a local, read-only report section showing whether Amulet can "
+            "translate known block identities into item-capable forms. This is "
+            "diagnostic only and does not change exported items, conversion "
+            "authority, storage contents or item frames.",
+        )
+
+        self.include_amulet_translator_probe = wx.CheckBox(
+            self.settings_panel,
+            label="Include Amulet translator validation probe in report",
+        )
+        self.include_amulet_translator_probe.SetValue(False)
+        advanced_diagnostics_sizer.Add(
+            self.include_amulet_translator_probe,
+            0,
+            wx.ALL,
+            6,
+        )
+
+        self._set_tooltip(
+            self.include_amulet_translator_probe,
+            "Runs a local, read-only validation probe against Amulet's block and "
+            "item translators. The probe does not change conversion results, does "
+            "not include local paths, and does not send data online.",
+        )
+
+        self.use_reviewed_amulet_normalization = wx.CheckBox(
+            self.settings_panel,
+            label="Use plugin-reviewed conversion fallback",
+        )
+        self.use_reviewed_amulet_normalization.SetValue(True)
+        diagnostics_sizer.Add(
+            self.use_reviewed_amulet_normalization,
+            0,
+            wx.ALL,
+            6,
+        )
+        self._set_tooltip(
+            self.use_reviewed_amulet_normalization,
+            "Lets the plugin use only built-in conversion fallbacks that have "
+            "been individually reviewed and tested against Amulet. The plugin "
+            "keeps final authority, built-in state-aware conversions keep "
+            "priority, and unreviewed candidates remain report-only.",
+        )
+
+        self.record_conversion_candidates = wx.CheckBox(
+            self.settings_panel,
+            label=f"Record inactive candidates to {self.CONVERSION_CANDIDATES_FILENAME}",
+        )
+        self.record_conversion_candidates.SetValue(False)
+        diagnostics_sizer.Add(
+            self.record_conversion_candidates,
+            0,
+            wx.ALL,
+            6,
+        )
+
+        self.attempt_unresolved_item_writes = wx.CheckBox(
+            self.settings_panel,
+            label="Attempt unresolved item writes",
+        )
+        self.attempt_unresolved_item_writes.SetValue(False)
+        diagnostics_sizer.Add(
+            self.attempt_unresolved_item_writes,
+            0,
+            wx.ALL,
+            6,
+        )
+
+        self.include_amulet_conversion_audit = wx.CheckBox(
+            self.settings_panel,
+            label="Include Amulet conversion comparison audit in report",
+        )
+        self.include_amulet_conversion_audit.SetValue(False)
+        advanced_diagnostics_sizer.Add(
+            self.include_amulet_conversion_audit,
+            0,
+            wx.ALL,
+            6,
+        )
+
+        self.record_all_conversion_observations = wx.CheckBox(
+            self.settings_panel,
+            label="Record all resolved conversion observations",
+        )
+        self.record_all_conversion_observations.SetValue(False)
+        advanced_diagnostics_sizer.Add(
+            self.record_all_conversion_observations,
+            0,
+            wx.ALL,
+            6,
+        )
+        self._set_tooltip(
+            self.record_conversion_candidates,
+            "Records inactive conversion observations in a local candidate "
+            "file. This includes unresolved Amulet normalization candidates "
+            "and successful external language-assisted identity recoveries. The "
+            "plugin reads any existing candidate file only to merge observation "
+            "counts. Candidates never change exports or active conversion rules.",
+        )
+        self._set_tooltip(
+            self.attempt_unresolved_item_writes,
+            "Testing only. Allows unresolved generic item identifiers to be "
+            "written into storage and item frames so ghost or empty results "
+            "can be located in-game. Known dangerous technical blocks remain "
+            "blocked. Leave disabled for normal exports.",
+        )
+        self._set_tooltip(
+            self.include_amulet_conversion_audit,
+            "Reports which resolver layer chose each final item and compares "
+            "generic identifiers with Amulet normalization candidates. It is "
+            "report-only, bounded, local, and does not change exported items.",
+        )
+        self._set_tooltip(
+            self.record_all_conversion_observations,
+            "Advanced testing only. Records state-aware observations even when "
+            "the source family is already handled by a tested built-in resolver. "
+            "External language-assisted recoveries are recorded without enabling this "
+            "option. Leave it disabled to keep Conversion Candidates.BTSP focused.",
+        )
+
+        # Reapply initial category states after their controls have been added.
+        self._update_collapsible_settings_section("Performance")
+        self._update_collapsible_settings_section("Safety")
+        self._update_collapsible_settings_section("Debug and Diagnostics")
+        self._update_collapsible_settings_section("Advanced Diagnostics")
 
         self._sizer.Add(self.settings_panel, 0, wx.ALL | wx.EXPAND, 0)
 
@@ -3137,6 +3688,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL,
             size=(-1, 420),
         )
+        self.text.SetName(self.CONSOLE_SEMANTIC_NAME)
         self.text.SetMinSize((320, 260))
         self.text.SetForegroundColour((0, 255, 0))
         self.text.SetBackgroundColour((0, 0, 0))
@@ -3171,7 +3723,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         )
         self._set_tooltip(
             self.include_unusual,
-            "Includes normally skipped blocks such as water, lava, bubble columns, budding amethyst, infested blocks, barrier, light, portal blocks, command blocks, and other technical blocks.",
+            "Includes technical or normally unobtainable block forms when they "
+            "have a supported item representation. Leave disabled for normal "
+            "survival-friendly exports.",
         )
         self._set_tooltip(
             self.preserve_bedrock,
@@ -3195,7 +3749,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         )
         self._set_tooltip(
             self.use_installed_language_data,
-            "Allows unresolved ABC display names to use a local Minecraft Bedrock Edition en_US.lang file. This is disabled by default. Embedded verified names always keep priority.",
+            "Allows unresolved ABC display names and conservative scan-identity recovery to use a local Minecraft Bedrock Edition en_US.lang file during an operation. This fallback does not update Found Entries.BTSP unless the separate update checkbox is enabled. Embedded verified names always keep priority.",
         )
         self._set_tooltip(
             self.auto_detect_language_file,
@@ -3215,15 +3769,17 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         )
         self._set_tooltip(
             self.save_found_language_entries,
-            f"Atomically saves newly used external display-name entries to {self.FOUND_ENTRIES_FILENAME}. Existing entries are preserved and embedded plugin data is never modified.",
+            f"When checked, scans the configured Minecraft en_US.lang file once before each operation and atomically adds safe tile, item and block display-name entries missing from both the embedded table and {self.FOUND_ENTRIES_FILENAME}. When unchecked, no automatic full-file update scan occurs. Existing entries are preserved and embedded plugin data is never modified.",
         )
         self._set_tooltip(
-            self.delete_display_name_data_button,
-            f"Finds and deletes only plugin-created {self.FOUND_ENTRIES_FILENAME} files and the plugin-created fallback data folder when it becomes empty. A confirmation window lists every exact path before deletion. Minecraft language files, worlds, reports and the plugin are never deleted.",
+            self.manage_plugin_files_button,
+            "Manages saved settings and optional Blocks to Storage data files. "
+            "Settings can be reset, imported, exported, or deleted. Other files "
+            "can be created, deleted, or updated from the configured language file.",
         )
         self._set_tooltip(
             self.simulate_missing_display_name,
-            "Testing only. Makes one item behave as though its embedded display-name entry is missing, allowing the external fallback and cache paths to be tested without editing the plugin.",
+            "Testing only. Makes one item behave as though its embedded display-name entry is missing, allowing the Found Entries cache and installed language fallback to be tested without editing the plugin.",
         )
         self._set_tooltip(
             self.simulated_missing_alias_label,
@@ -3232,6 +3788,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._set_tooltip(
             self.simulated_missing_alias,
             "Internal item alias to ignore in the embedded table during testing, for example oak_log. Only one alias is supported.",
+        )
+        self._set_tooltip(
+            self.use_conversion_entries,
+            f"Reads reviewed local block-to-item rules from {self.CONVERSION_ENTRIES_FILENAME}. The plugin never writes active rules to this file. Built-in verified conversions keep priority. Missing, unreadable or malformed files fail safely and do not stop exports.",
         )
         self._set_tooltip(
             self.include_item_frame_audit,
@@ -3287,7 +3847,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         )
         self._set_tooltip(
             self.run_export_button,
-            "Scans the selected area, counts exportable blocks, clears the selected blocks, and places the collected blocks into the chosen storage type.",
+            "Scans the selected area, counts exportable source blocks and resulting items, clears the selected blocks, and places the collected items into the chosen storage type.",
         )
         self._set_tooltip(
             self.save_report_button,
@@ -3295,9 +3855,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         )
         self._set_tooltip(
             self.text,
-            "Shows the export log, block counts, skipped blocks, placement summary, timing, speed, and report details for the latest run.",
+            "Shows the export log, source-block and item counts, skipped blocks, placement summary, timing, speed, and report details for the latest run.",
         )
 
+        self._initialize_settings_persistence()
         self._update_option_visibility()
 
     def bind_events(self):
@@ -3328,7 +3889,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             pass
 
         try:
-            wx.ToolTip.SetAutoPop(15000)
+            wx.ToolTip.SetAutoPop(28000)
         except Exception:
             pass
 
@@ -3349,6 +3910,104 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             except Exception:
                 pass
 
+    def _add_collapsible_settings_section(
+        self,
+        label: str,
+        expanded: bool = True,
+        parent_sizer: Optional[wx.BoxSizer] = None,
+    ) -> wx.BoxSizer:
+        """
+        Adds a toggleable settings category and returns its content sizer.
+
+        Controls remain parented to the main scrolled settings panel for broad
+        wxPython and Amulet compatibility. Only the category's sizer items are
+        shown or hidden.
+        """
+        header = wx.ToggleButton(
+            self.settings_panel,
+            label="",
+            style=wx.BU_LEFT,
+        )
+        content_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        target_sizer = parent_sizer or self.settings_sizer
+        target_sizer.Add(
+            header,
+            0,
+            wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND,
+            6,
+        )
+        target_sizer.Add(
+            content_sizer,
+            0,
+            wx.LEFT | wx.RIGHT | wx.EXPAND,
+            6,
+        )
+
+        self._collapsible_settings_sections[label] = (
+            header,
+            content_sizer,
+        )
+        header.SetValue(bool(expanded))
+        self._update_collapsible_settings_section(label)
+        header.Bind(
+            wx.EVT_TOGGLEBUTTON,
+            lambda event, section_label=label: (
+                self._on_collapsible_settings_section_toggled(
+                    event,
+                    section_label,
+                )
+            ),
+        )
+        return content_sizer
+
+    def _on_collapsible_settings_section_toggled(
+        self,
+        event,
+        label: str,
+    ) -> None:
+        """
+        Updates one collapsible category after its toggle button is pressed.
+
+        Expanding a parent sizer can make nested child controls visible through
+        wxPython's recursive ShowItems behavior. Reapplying the child category
+        state keeps a collapsed nested section closed.
+        """
+        self._update_collapsible_settings_section(label)
+
+        if label == "Debug and Diagnostics":
+            self._update_collapsible_settings_section(
+                "Advanced Diagnostics"
+            )
+
+        self._schedule_settings_config_save()
+
+        try:
+            event.Skip()
+        except Exception:
+            pass
+
+    def _update_collapsible_settings_section(self, label: str) -> None:
+        """
+        Applies the current expanded state and refreshes scrolling and layout.
+        """
+        section = self._collapsible_settings_sections.get(label)
+        if section is None:
+            return
+
+        header, content_sizer = section
+        expanded = bool(header.GetValue())
+        marker = "▼" if expanded else "▶"
+        header.SetLabel(f"{marker} {label}")
+        content_sizer.ShowItems(expanded)
+
+        try:
+            self.settings_panel.FitInside()
+            self.settings_panel.Layout()
+            self.Layout()
+        except Exception:
+            pass
+
     def _add_settings_section(self, label: str) -> None:
         """
         Adds a bold settings section label without changing option behavior.
@@ -3364,6 +4023,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         self.settings_sizer.Add(section_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 6)
 
+    # ---------------------------------------------------------------------
+    # Scan-identity recovery helpers
+    # ---------------------------------------------------------------------
     def _needs_safe_block_lookup(self, item_name: Optional[str]) -> bool:
         """
         Returns whether a fast-scan name should be re-read through Amulet.
@@ -3400,6 +4062,566 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             and not item_name.endswith("_candle_cake")
         )
 
+    def _get_scan_identity_property_values(self, block) -> List[str]:
+        """
+        Returns normalized block-state values that may identify a new material.
+
+        The values are used only as conservative hints when an ambiguous direct
+        scan name is translated by Amulet into a different existing block.
+        Structural states such as top / bottom and true / false are ignored.
+        """
+        properties = getattr(block, "properties", None) or {}
+        ignored_values = {
+            "", "0", "1", "2", "3", "4", "5", "6", "7",
+            "8", "9", "10", "11", "12", "13", "14", "15",
+            "true", "false", "top", "bottom", "upper", "lower",
+            "north", "south", "east", "west", "none", "single",
+            "double", "normal", "open", "closed",
+        }
+
+        values: List[str] = []
+        seen = set()
+        try:
+            property_items = properties.items()
+        except Exception:
+            property_items = []
+
+        for _property_name, raw_value in property_items:
+            value = self._normalize_state_text(raw_value)
+            value = self._normalize_language_alias(value)
+            if not value or value in ignored_values or value in seen:
+                continue
+            if not re.fullmatch(r"[a-z0-9_]+", value):
+                continue
+            seen.add(value)
+            values.append(value)
+
+        return values
+
+    def _is_double_slab_state(
+        self,
+        block,
+        block_key: Optional[str] = None,
+    ) -> bool:
+        """
+        Returns whether a placed block represents a double slab.
+
+        Modern palettes may store a double slab as ``minecraft:slab`` with
+        ``type=double`` instead of exposing a ``*_double_slab`` identifier.
+        Detecting both forms preserves the correct two-item export count and,
+        when unusual blocks are enabled, allows an exact double-slab identity
+        to be recovered from trusted built-in or external evidence.
+        """
+        normalized_key = self._normalize_conversion_identifier(
+            block_key or self._get_namespaced_block_name(block) or ""
+        )
+        if normalized_key is not None:
+            base_name = normalized_key.split(":", 1)[1]
+            if "double" in base_name and "slab" in base_name:
+                return True
+
+        properties = getattr(block, "properties", None) or {}
+        try:
+            property_items = properties.items()
+        except Exception:
+            property_items = []
+
+        for raw_property_name, raw_property_value in property_items:
+            property_name = self._normalize_language_alias(
+                self._normalize_state_text(raw_property_name)
+            )
+            property_value = self._normalize_language_alias(
+                self._normalize_state_text(raw_property_value)
+            )
+            if (
+                property_name in {"type", "slab_type", "minecraft:slab_type"}
+                and property_value == "double"
+            ):
+                return True
+
+        return False
+
+    def _get_scan_identity_family_suffixes(
+        self,
+        raw_block,
+        raw_scan_key: Optional[str],
+        safe_item_key: Optional[str],
+    ) -> List[str]:
+        """
+        Returns item-family suffixes supported by trusted identity recovery.
+
+        Recovery is intentionally limited to simple modern block families whose
+        placed block and inventory item identifiers normally share the same name.
+        A generic slab carrying ``type=double`` is treated as a double-slab
+        family so exact trusted evidence may preserve that structural state.
+        """
+        base_names = []
+        for value in (raw_scan_key, safe_item_key):
+            if not value:
+                continue
+            base_name = str(value).split(":", 1)[-1]
+            if base_name not in base_names:
+                base_names.append(base_name)
+
+        slab_family_present = any("slab" in base_name for base_name in base_names)
+        if slab_family_present and self._is_double_slab_state(
+            raw_block,
+            raw_scan_key,
+        ):
+            return ["double_slab"]
+
+        suffixes: List[str] = []
+        for base_name in base_names:
+            if "double" in base_name and "slab" in base_name:
+                if "double_slab" not in suffixes:
+                    suffixes.append("double_slab")
+                continue
+            if "slab" in base_name and "slab" not in suffixes:
+                suffixes.append("slab")
+            if "stairs" in base_name and "stairs" not in suffixes:
+                suffixes.append("stairs")
+            if (
+                base_name == "wall"
+                or base_name.endswith("_wall")
+                or "wall_block" in base_name
+            ) and "wall" not in suffixes:
+                suffixes.append("wall")
+
+        return suffixes
+
+    def _get_scan_identity_source(self, alias: str) -> str:
+        """
+        Returns the trusted source containing one placed-block alias.
+
+        Built-in integrated entries have priority because they are explicitly
+        reviewed and runtime-tested. Found Entries keeps priority over the
+        installed language fallback for all remaining aliases. Only ``tile.*``
+        and ``block.*`` entries may provide placed-block identity evidence.
+        """
+        alias = self._normalize_language_alias(alias)
+        if not alias:
+            return ""
+
+        if alias in self.INTEGRATED_SCAN_IDENTITY_BLOCK_ALIASES:
+            result = self.BEDROCK_EN_US_DISPLAY_NAMES.get(alias)
+            if result is not None:
+                language_key, _display_name = result
+                if str(language_key).startswith(("tile.", "block.")):
+                    return self.BUILT_IN_INTEGRATED_SOURCE_LABEL
+
+        if self.use_found_entries_cache.GetValue():
+            result = self._found_entries_aliases.get(alias)
+            if result is not None:
+                language_key, _display_name = result
+                if str(language_key).startswith(("tile.", "block.")):
+                    return self.FOUND_ENTRIES_FILENAME
+
+        if self.use_installed_language_data.GetValue():
+            result = self._external_language_aliases.get(alias)
+            if result is not None:
+                language_key, _display_name = result
+                if str(language_key).startswith(("tile.", "block.")):
+                    return self.INSTALLED_LANGUAGE_SOURCE_LABEL
+
+        return ""
+
+    def _get_scan_identity_material_variants(self, raw_block) -> Set[str]:
+        """
+        Returns normalized material-state identities for compatibility checks.
+
+        The same conservative values used to build external recovery candidates
+        are reused here so a valid Amulet translation can be retained when it
+        already represents the raw material, even if its exact item identifier
+        differs from a language-file alias.
+        """
+        variants: Set[str] = set()
+
+        for material_value in self._get_scan_identity_property_values(raw_block):
+            variants.add(material_value)
+
+            if material_value.endswith("_bricks"):
+                variants.add(
+                    material_value[:-len("_bricks")] + "_brick"
+                )
+
+        return variants
+
+    def _scan_identity_item_matches_material(
+        self,
+        item_key: Optional[str],
+        material_variants: Set[str],
+    ) -> bool:
+        """
+        Checks whether a concrete item identity agrees with raw material state.
+
+        This is intentionally token-based and conservative. It allows known
+        naming differences such as ``stone`` versus ``normal_stone_slab`` while
+        still detecting clear conflicts such as ``sulfur`` versus
+        ``mangrove_slab``.
+        """
+        normalized_key = self._normalize_conversion_identifier(
+            item_key or ""
+        )
+        if normalized_key is None or not material_variants:
+            return False
+
+        item_alias = normalized_key.split(":", 1)[1]
+        item_material = item_alias
+
+        for suffix in ("double_slab", "slab", "stairs", "wall"):
+            suffix_text = "_" + suffix
+            if item_material.endswith(suffix_text):
+                item_material = item_material[:-len(suffix_text)]
+                break
+
+        item_tokens = {
+            token
+            for token in item_material.split("_")
+            if token
+        }
+
+        for material_variant in material_variants:
+            material_variant = self._normalize_language_alias(
+                material_variant
+            )
+            if not material_variant:
+                continue
+
+            if (
+                item_material == material_variant
+                or item_material.endswith("_" + material_variant)
+                or item_material.startswith(material_variant + "_")
+            ):
+                return True
+
+            material_tokens = {
+                token
+                for token in material_variant.split("_")
+                if token
+            }
+            if material_tokens and material_tokens.issubset(item_tokens):
+                return True
+
+        return False
+
+    def _should_apply_scan_identity(
+        self,
+        raw_block,
+        safe_item_key: Optional[str],
+        candidate_item_key: Optional[str],
+        *,
+        direct_identity: bool = False,
+    ) -> bool:
+        """
+        Returns whether trusted identity evidence should replace Amulet output.
+
+        Integrated or external aliases may correct a missing, unsafe or clearly
+        conflicting translation. They do not replace an identical translation
+        or a concrete Amulet item that already agrees with the raw material
+        state. Exact direct block identifiers remain strong evidence when the
+        translated identity differs.
+        """
+        candidate_key = self._normalize_conversion_identifier(
+            candidate_item_key or ""
+        )
+        if candidate_key is None:
+            return False
+
+        safe_key = self._normalize_conversion_identifier(
+            safe_item_key or ""
+        )
+        if safe_key is None:
+            return True
+
+        if candidate_key == safe_key:
+            return False
+
+        candidate_alias = candidate_key.split(":", 1)[1]
+        safe_alias = safe_key.split(":", 1)[1]
+
+        # Structural slab state takes priority over material-only agreement.
+        # Amulet may translate ``type=double`` into the matching regular slab,
+        # which has the correct material but represents only one inventory item.
+        if (
+            self._is_double_slab_state(raw_block)
+            and candidate_alias.endswith("_double_slab")
+            and not safe_alias.endswith("_double_slab")
+        ):
+            return True
+
+        if direct_identity:
+            return True
+
+        if (
+            safe_key in self.GENERIC_UNSAFE_ITEM_BLOCKS
+            or not self._is_safe_item_key(safe_key)
+        ):
+            return True
+
+        material_variants = self._get_scan_identity_material_variants(
+            raw_block
+        )
+        if not material_variants:
+            return False
+
+        if self._scan_identity_item_matches_material(
+            safe_key,
+            material_variants,
+        ):
+            return False
+
+        return True
+
+    def _resolve_scan_identity(
+        self,
+        raw_block,
+        raw_scan_key: Optional[str],
+        safe_item_key: Optional[str],
+    ) -> Tuple[Optional[str], str]:
+        """
+        Recovers an exact item identifier from trusted language-name evidence.
+
+        The embedded allowlist provides built-in state-aware recovery for the
+        verified sulfur and cinnabar families. Optional Found Entries and
+        installed-language data remain conservative external evidence for other
+        aliases. The helper never guesses between multiple identities, never
+        records an identical Amulet translation as a recovery, and retains a
+        concrete Amulet result when it already agrees with the raw material.
+        """
+        external_sources_enabled = (
+            self.use_found_entries_cache.GetValue()
+            or self.use_installed_language_data.GetValue()
+        )
+        if external_sources_enabled:
+            self._ensure_external_language_data_loaded()
+
+        if (
+            not self.INTEGRATED_SCAN_IDENTITY_BLOCK_ALIASES
+            and not self._found_entries_aliases
+            and not self._external_language_aliases
+        ):
+            return None, ""
+
+        raw_key = self._normalize_conversion_identifier(raw_scan_key or "")
+        if raw_key is not None:
+            raw_alias = raw_key.split(":", 1)[1]
+            source = self._get_scan_identity_source(raw_alias)
+            if (
+                source
+                and self._is_safe_conversion_source_key(raw_key)
+                and self._is_safe_item_key(raw_key)
+                and self._should_apply_scan_identity(
+                    raw_block,
+                    safe_item_key,
+                    raw_key,
+                    direct_identity=True,
+                )
+            ):
+                return raw_key, source
+
+        suffixes = self._get_scan_identity_family_suffixes(
+            raw_block,
+            raw_scan_key,
+            safe_item_key,
+        )
+        if not suffixes:
+            return None, ""
+
+        candidate_aliases = set()
+        for material_value in self._get_scan_identity_property_values(raw_block):
+            material_variants = {material_value}
+            if material_value.endswith("_bricks"):
+                material_variants.add(
+                    material_value[:-len("_bricks")] + "_brick"
+                )
+
+            for material_variant in material_variants:
+                for suffix in suffixes:
+                    if material_variant.endswith("_" + suffix):
+                        candidate_aliases.add(material_variant)
+                    else:
+                        candidate_aliases.add(
+                            f"{material_variant}_{suffix}"
+                        )
+
+        matched_items: Dict[str, str] = {}
+        for alias in sorted(candidate_aliases):
+            source = self._get_scan_identity_source(alias)
+            if not source:
+                continue
+
+            item_key = self._normalize_conversion_identifier(
+                f"minecraft:{alias}"
+            )
+            if item_key is None or not self._is_safe_item_key(item_key):
+                continue
+
+            # Source priority is resolved by _get_scan_identity_source.
+            matched_items.setdefault(item_key, source)
+
+        if len(matched_items) == 1:
+            item_key, source = next(iter(matched_items.items()))
+            if self._should_apply_scan_identity(
+                raw_block,
+                safe_item_key,
+                item_key,
+            ):
+                return item_key, source
+        return None, ""
+
+    def _format_scan_identity_properties(self, block) -> str:
+        """
+        Returns bounded block properties for scan-identity diagnostics.
+        """
+        try:
+            properties = getattr(block, "properties", None) or {}
+            parts = []
+            for property_name in sorted(properties, key=lambda value: str(value)):
+                property_value = self._tag_to_python_value(
+                    properties[property_name]
+                )
+                parts.append(f"{property_name}={property_value}")
+            text = "; ".join(parts) or "(none)"
+        except Exception:
+            text = "(unavailable)"
+        return self._safe_conversion_diagnostic_text(text, 300)
+
+    def _record_scan_identity_result(
+        self,
+        raw_block,
+        raw_scan_key: Optional[str],
+        safe_block,
+        safe_item_key: Optional[str],
+        recovered_item_key: Optional[str],
+        recovery_source: str = "",
+    ) -> None:
+        """
+        Records bounded evidence for ambiguous direct / translated identities.
+        """
+        raw_name = str(raw_scan_key or "<unknown>")
+        safe_name = str(safe_item_key or "<none>")
+        recovered_name = str(recovered_item_key or "<none>")
+
+        if recovered_item_key:
+            recovery_key = (raw_name, safe_name, recovered_name)
+            if recovery_source == self.BUILT_IN_INTEGRATED_SOURCE_LABEL:
+                self._built_in_scan_identity_recoveries[recovery_key] += 1
+            elif recovery_source == self.INSTALLED_LANGUAGE_SOURCE_LABEL:
+                self._installed_language_scan_identity_recoveries[
+                    recovery_key
+                ] += 1
+            else:
+                self._found_entry_scan_identity_recoveries[
+                    recovery_key
+                ] += 1
+
+        if raw_name == safe_name and not recovered_item_key:
+            return
+
+        signature = (
+            raw_name,
+            self._format_scan_identity_properties(raw_block),
+            safe_name,
+            self._format_scan_identity_properties(safe_block),
+            recovery_source or "<none>",
+            recovered_name,
+        )
+        if (
+            signature not in self._scan_identity_diagnostics
+            and len(self._scan_identity_diagnostics)
+            >= self.MAX_FOUND_ENTRY_SCAN_IDENTITY_DETAILS
+        ):
+            self._scan_identity_diagnostic_overflow += 1
+            return
+        self._scan_identity_diagnostics[signature] += 1
+
+    def _log_scan_identity_summary(self) -> None:
+        """
+        Adds built-in and external language-assisted identity results to the report.
+        """
+        built_in_total = sum(
+            self._built_in_scan_identity_recoveries.values()
+        )
+        found_entries_total = sum(
+            self._found_entry_scan_identity_recoveries.values()
+        )
+        installed_language_total = sum(
+            self._installed_language_scan_identity_recoveries.values()
+        )
+        external_total = found_entries_total + installed_language_total
+        recovered_total = built_in_total + external_total
+
+        self._log(f"Scan identities recovered: {recovered_total:,}")
+        self._log(
+            f"Built-in integrated identities recovered: {built_in_total:,}"
+        )
+        self._log(
+            f"External language scan identities recovered: {external_total:,}"
+        )
+        self._log(
+            f"Found Entries-assisted identities recovered: "
+            f"{found_entries_total:,}"
+        )
+        self._log(
+            f"Installed language-assisted identities recovered: "
+            f"{installed_language_total:,}"
+        )
+
+        if recovered_total:
+            self._log("Recovered scan identities:")
+            for source_label, recoveries in (
+                (
+                    self.BUILT_IN_INTEGRATED_SOURCE_LABEL,
+                    self._built_in_scan_identity_recoveries,
+                ),
+                (
+                    self.FOUND_ENTRIES_FILENAME,
+                    self._found_entry_scan_identity_recoveries,
+                ),
+                (
+                    self.INSTALLED_LANGUAGE_SOURCE_LABEL,
+                    self._installed_language_scan_identity_recoveries,
+                ),
+            ):
+                for (raw_name, safe_name, recovered_name), count in sorted(
+                    recoveries.items()
+                ):
+                    self._log(
+                        f"  [{source_label}] {raw_name} -> {recovered_name} "
+                        f"(Amulet translated: {safe_name}; {count:,} block"
+                        f"{'s' if count != 1 else ''})"
+                    )
+
+        if self._scan_identity_diagnostics:
+            self._log("Ambiguous scan identity details:")
+            for (
+                raw_name,
+                raw_properties,
+                safe_name,
+                safe_properties,
+                recovery_source,
+                recovered_name,
+            ), count in sorted(self._scan_identity_diagnostics.items()):
+                recovery_text = (
+                    f"{recovery_source} {recovered_name}"
+                    if recovered_name != "<none>"
+                    else "no identity recovery"
+                )
+                self._log(
+                    f"  Direct {raw_name} [{raw_properties}] -> Amulet "
+                    f"{safe_name} [{safe_properties}] -> {recovery_text} "
+                    f"({count:,} block{'s' if count != 1 else ''})"
+                )
+
+        if self._scan_identity_diagnostic_overflow:
+            self._log(
+                "  Additional identity details omitted: "
+                f"{self._scan_identity_diagnostic_overflow:,}"
+            )
+
+    # ---------------------------------------------------------------------
+    # UI state and visibility helpers
+    # ---------------------------------------------------------------------
     def _get_selected_container(self) -> str:
         """
         Returns the selected storage container type, defaulting to chest if the UI has no value.
@@ -3414,18 +4636,21 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         Refreshes option visibility when the storage container type changes.
         """
         self._update_option_visibility()
+        self._schedule_settings_config_save()
 
     def _on_separate_types_changed(self, _):
         """
         Refreshes option visibility when separated storage groups are enabled or disabled.
         """
         self._update_option_visibility()
+        self._schedule_settings_config_save()
 
     def _on_nested_shulker_storage_changed(self, _):
         """
         Refreshes option visibility when nested shulker storage is enabled or disabled.
         """
         self._update_option_visibility()
+        self._schedule_settings_config_save()
 
 
     def _on_display_name_dependency_changed(self, _) -> None:
@@ -3433,24 +4658,28 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         Refreshes conditional controls in the Display-name data setting tree.
         """
         self._update_option_visibility()
+        self._schedule_settings_config_save()
 
     def _on_installed_language_data_changed(self, _) -> None:
         """
         Refreshes display-name data controls when the fallback is enabled.
         """
         self._update_option_visibility()
+        self._schedule_settings_config_save()
 
     def _on_auto_detect_language_file_changed(self, _) -> None:
         """
         Refreshes manual language-path controls when detection changes.
         """
         self._update_option_visibility()
+        self._schedule_settings_config_save()
 
     def _on_simulate_missing_display_name_changed(self, _) -> None:
         """
         Refreshes the simulated-missing-entry field when testing is enabled.
         """
         self._update_option_visibility()
+        self._schedule_settings_config_save()
 
     def _browse_for_language_file(self, _) -> None:
         """
@@ -3575,15 +4804,19 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         # Display-name data uses a local active-child visibility rule. A checked
         # child remains visible after its parent is disabled so the user can see
         # and turn off the still-active setting. Once unchecked, it hides again.
+        language_file_access_enabled = (
+            external_language_enabled or save_entries_checked
+        )
+
         if hasattr(self, "auto_detect_language_file"):
             self.auto_detect_language_file.Show(
-                external_language_enabled
+                language_file_access_enabled
                 or automatic_detection_checked
             )
 
         if hasattr(self, "language_file_row"):
             show_manual_language_path = (
-                external_language_enabled
+                language_file_access_enabled
                 and not automatic_detection_checked
             )
             for child in self.language_file_row.GetChildren():
@@ -3592,10 +4825,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                     window.Show(show_manual_language_path)
 
         if hasattr(self, "save_found_language_entries"):
-            self.save_found_language_entries.Show(
-                external_language_enabled
-                or save_entries_checked
-            )
+            # This is an independent opt-in, not a child of runtime fallback.
+            self.save_found_language_entries.Show(True)
 
         if hasattr(self, "simulate_missing_display_name"):
             self.simulate_missing_display_name.Show(
@@ -3603,9 +4834,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 or external_language_enabled
                 or simulation_checked
             )
-
-        if hasattr(self, "delete_display_name_data_button"):
-            self.delete_display_name_data_button.Show(True)
 
         if hasattr(self, "simulated_missing_alias_row"):
             for child in self.simulated_missing_alias_row.GetChildren():
@@ -3683,8 +4911,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             "Large selection warning\n\n"
             f"Estimated selected blocks: {estimated_volume:,}\n\n"
             "This operation may take several minutes, especially if many storage containers need to be created.\n\n"
-            "The plugin will scan the selection, clear exportable blocks, preserve protected bedrock if enabled, "
-            "and place the collected blocks into storage containers.\n\n"
+            "The plugin will scan the selection, clear exportable source blocks, preserve protected bedrock if enabled, "
+            "and place the resulting items into storage containers.\n\n"
             "Continue?"
         )
 
@@ -3846,9 +5074,59 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 except Exception:
                     pass
 
+    def _write_text_atomically(
+        self,
+        destination: Path,
+        content: str,
+        replace_existing: bool = True,
+    ) -> None:
+        """
+        Writes UTF-8 text through a temporary file in the target directory.
+
+        Replacement uses os.replace so an existing destination changes only
+        after the complete temporary file has been flushed. New managed files
+        use an atomic hard-link step so an existing file is never overwritten.
+        """
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = None
+
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                newline="\n",
+                prefix=destination.name + ".",
+                suffix=".tmp",
+                dir=str(destination.parent),
+                delete=False,
+            ) as handle:
+                handle.write(content)
+                handle.flush()
+                try:
+                    os.fsync(handle.fileno())
+                except Exception:
+                    pass
+                temporary_path = Path(handle.name)
+
+            if replace_existing:
+                os.replace(str(temporary_path), str(destination))
+                temporary_path = None
+                return
+
+            os.link(str(temporary_path), str(destination))
+            temporary_path.unlink()
+            temporary_path = None
+        finally:
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink()
+                except Exception:
+                    pass
+
     def _save_last_report(self, _):
         """
-        Lets the user choose where to save the latest report text file.
+        Lets the user save the latest report atomically as UTF-8 text.
         """
         if not self._last_report_text:
             wx.MessageBox(
@@ -3873,9 +5151,11 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             path = dialog.GetPath()
 
         try:
-            with open(path, "w", encoding="utf-8") as report_file:
-                report_file.write(self._last_report_text)
-                report_file.write("\n")
+            self._write_text_atomically(
+                Path(path),
+                self._last_report_text + "\n",
+                replace_existing=True,
+            )
             wx.MessageBox(
                 f"Report saved:\n{path}",
                 "Report Saved",
@@ -4100,7 +5380,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         return second_pos, first_pos, connection_2, connection_1
 
     # ---------------------------------------------------------------------
-    # Block / NBT helpers
+    # Block conversion / NBT helpers
     # ---------------------------------------------------------------------
     def _normalize_name(self, value) -> str:
         """
@@ -4360,20 +5640,29 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return item_by_color.get(color_name)
 
-    def _get_coral_block_item_name(self, block, key: str) -> Optional[str]:
+    def _get_coral_type_and_dead_state(
+        self,
+        block,
+        key: str,
+    ) -> Tuple[Optional[str], bool]:
         """
-        Converts generic coral block data into the matching live or dead Bedrock item name.
+        Resolves coral type and dead state from modern names or legacy states.
         """
-        key_text = str(key).strip().lower()
+        key_text = str(key or "").strip().lower()
         if key_text.startswith("minecraft:"):
             key_text = key_text.split(":", 1)[1]
+        key_text = key_text.replace(" ", "_").replace("-", "_")
 
-        is_dead = key_text.startswith("dead_")
+        is_dead = (
+            key_text.startswith("dead_")
+            or "_dead" in key_text
+            or key_text.endswith("_dead")
+        )
         coral_type = None
 
-        for candidate in self.CORAL_BLOCK_TYPES:
-            if candidate in key_text:
-                coral_type = candidate
+        for alias, canonical_type in self.CORAL_TYPE_ALIASES.items():
+            if alias in key_text:
+                coral_type = canonical_type
                 break
 
         if coral_type is None:
@@ -4388,17 +5677,20 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                     "colour",
                 ),
             )
+            type_text = self._normalize_state_text(raw_type)
+            if type_text:
+                type_text = type_text.removesuffix("_fan")
+                type_text = type_text.removesuffix("_coral")
+                type_text = type_text.removesuffix("_block")
+                type_text = type_text.removeprefix("dead_")
+                type_text = type_text.removesuffix("_dead")
+                coral_type = self.CORAL_TYPE_ALIASES.get(type_text)
 
-            if raw_type is not None:
-                type_text = str(raw_type).strip().lower()
-                if type_text.startswith("minecraft:"):
-                    type_text = type_text.split(":", 1)[1]
-                type_text = type_text.replace(" ", "_").replace("-", "_")
-
-                for candidate in self.CORAL_BLOCK_TYPES:
-                    if candidate in type_text:
-                        coral_type = candidate
-                        break
+                if coral_type is None:
+                    for alias, canonical_type in self.CORAL_TYPE_ALIASES.items():
+                        if alias in type_text:
+                            coral_type = canonical_type
+                            break
 
         dead_value = self._get_block_property(
             block,
@@ -4411,6 +5703,34 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         if self._is_truthy_state_value(dead_value):
             is_dead = True
 
+        return coral_type, is_dead
+
+    def _get_coral_item_name(self, block, key: str) -> Optional[str]:
+        """
+        Converts coral pieces and floor / wall fans into specific inventory items.
+        """
+        key_text = str(key or "").strip().lower()
+        if key_text.startswith("minecraft:"):
+            key_text = key_text.split(":", 1)[1]
+        key_text = key_text.replace(" ", "_").replace("-", "_")
+
+        coral_type, is_dead = self._get_coral_type_and_dead_state(block, key)
+        if coral_type is None:
+            return None
+
+        is_fan = "fan" in key_text
+        prefix = "dead_" if is_dead else ""
+        suffix = "_coral_fan" if is_fan else "_coral"
+        return f"minecraft:{prefix}{coral_type}{suffix}"
+
+    def _get_coral_block_item_name(self, block, key: str) -> Optional[str]:
+        """
+        Converts generic coral block data into the matching live or dead Bedrock item name.
+        """
+        coral_type, is_dead = self._get_coral_type_and_dead_state(
+            block,
+            key,
+        )
         if coral_type is None:
             return None
 
@@ -4733,7 +6053,11 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     def _get_banner_item_name(self, block, block_entity) -> str:
         """
-        Converts placed banners and wall banners into color-preserving item keys.
+        Converts placed banners into color- and type-preserving item keys.
+
+        Bedrock uses the banner item Type tag to distinguish special banners,
+        including the Ominous Banner, from an ordinary banner with the same
+        white base color. The type suffix keeps those groups separate.
         """
         base_color = self._get_block_entity_nbt_value(block_entity, "Base")
 
@@ -4749,13 +6073,49 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 ),
             )
 
+        banner_type = self._get_block_entity_nbt_value(block_entity, "Type")
+        if banner_type is None:
+            banner_type = 0
+
         try:
             base_color_value = int(base_color)
         except Exception:
             base_color_value = 0
 
+        try:
+            banner_type_value = int(banner_type)
+        except Exception:
+            banner_type_value = 0
+
         base_color_value = max(0, min(15, base_color_value))
-        return f"{self.BANNER_ITEM_PREFIX}{base_color_value}"
+        banner_type_value = max(0, banner_type_value)
+        return (
+            f"{self.BANNER_ITEM_PREFIX}{base_color_value}"
+            f"__type_{banner_type_value}"
+        )
+
+    def _get_banner_item_parts(self, item_name: str) -> Tuple[int, int]:
+        """
+        Returns the banner damage value and Bedrock banner Type tag.
+        """
+        value = str(item_name)
+        if not value.startswith(self.BANNER_ITEM_PREFIX):
+            return 0, 0
+
+        payload = value[len(self.BANNER_ITEM_PREFIX):]
+        damage_text, separator, type_text = payload.partition("__type_")
+
+        try:
+            damage_value = int(damage_text)
+        except Exception:
+            damage_value = 0
+
+        try:
+            type_value = int(type_text) if separator else 0
+        except Exception:
+            type_value = 0
+
+        return max(0, min(15, damage_value)), max(0, type_value)
 
     def _is_banner_item_key(self, item_name: str) -> bool:
         """
@@ -4773,8 +6133,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         if TAG_Compound is None or TAG_Int is None:
             return None
 
+        _damage_value, banner_type = self._get_banner_item_parts(item_name)
         tag = TAG_Compound()
-        tag["Type"] = TAG_Int(0)
+        tag["Type"] = TAG_Int(int(banner_type))
         return tag
 
     def _get_item_nbt_name_damage(self, item_name: str) -> Tuple[str, int]:
@@ -4784,11 +6145,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         item_name = self.ITEM_NAME_OVERRIDES.get(str(item_name), str(item_name))
 
         if self._is_banner_item_key(item_name):
-            try:
-                banner_damage = int(item_name.replace(self.BANNER_ITEM_PREFIX, "", 1))
-            except Exception:
-                banner_damage = 0
-            return "minecraft:banner", max(0, min(15, banner_damage))
+            banner_damage, _banner_type = self._get_banner_item_parts(item_name)
+            return "minecraft:banner", banner_damage
 
         if item_name in self.BED_COLOR_BY_ITEM_NAME:
             color_name = self.BED_COLOR_BY_ITEM_NAME[item_name]
@@ -4835,11 +6193,36 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         actual_name, _damage = self._get_item_nbt_name_damage(item_name)
         return actual_name not in self.ITEM_FRAME_NO_BLOCK_TAG_ITEMS
 
+    def _get_sapling_item_name(self, block) -> Optional[str]:
+        """
+        Resolves the legacy Bedrock sapling block state to a specific item.
+        """
+        sapling_type = self._get_block_property(
+            block,
+            (
+                "sapling_type",
+                "minecraft:sapling_type",
+                "wood_type",
+                "tree_type",
+            ),
+        )
+        if sapling_type is None:
+            return None
+
+        normalized_type = self._normalize_name(str(sapling_type))
+        normalized_type = normalized_type.replace("darkoak", "dark_oak")
+        normalized_type = normalized_type.replace("big oak", "big_oak")
+        normalized_type = normalized_type.replace("-", "_")
+        normalized_type = normalized_type.replace(" ", "_")
+
+        return self.SAPLING_ITEM_BY_TYPE.get(normalized_type)
+
     def _classify_block(self, block, block_entity=None) -> Tuple[Optional[str], Optional[str]]:
         """
         Decides whether a block should be exported, skipped or treated as air.
         """
         key = self._get_namespaced_block_name(block)
+        source_key = key
 
         if key is None:
             return None, "unknown_block"
@@ -4871,6 +6254,22 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             key = self._get_candle_cake_item_name(block, key)
         elif key == "minecraft:bars" or key.endswith("_bars"):
             key = self._get_bars_item_name(block)
+        elif key == "minecraft:sapling":
+            sapling_item = self._get_sapling_item_name(block)
+            if sapling_item:
+                key = sapling_item
+        elif (
+            key == "minecraft:coral"
+            or key == "minecraft:coral_fan"
+            or key == "minecraft:coral_fan_dead"
+            or key.startswith("minecraft:coral_fan_hang")
+            or key.endswith("_coral")
+            or key.endswith("_coral_fan")
+            or key.endswith("_coral_wall_fan")
+        ):
+            coral_item = self._get_coral_item_name(block, key)
+            if coral_item:
+                key = coral_item
         else:
             key = self.ITEM_NAME_OVERRIDES.get(key, key)
 
@@ -4966,6 +6365,26 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         if key == "minecraft:pitcher_crop":
             key = self._get_pitcher_crop_item_name(block)
 
+        conversion_entry_item = self._resolve_conversion_entry_item(source_key, key)
+        if conversion_entry_item:
+            key = conversion_entry_item
+
+        reviewed_normalization_item = self._resolve_reviewed_amulet_normalization(
+            block,
+            source_key,
+            key,
+        )
+        if reviewed_normalization_item:
+            key = reviewed_normalization_item
+
+        self._record_amulet_conversion_comparison(
+            block,
+            source_key,
+            key,
+            conversion_entry_item,
+            reviewed_normalization_item,
+        )
+
         if key == "minecraft:bedrock":
             return None, key
 
@@ -4994,7 +6413,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             return False
 
         if item_name in self.GENERIC_UNSAFE_ITEM_BLOCKS:
-            return False
+            try:
+                return bool(self.attempt_unresolved_item_writes.GetValue())
+            except Exception:
+                return False
 
         return True
 
@@ -5032,6 +6454,41 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             return item_name[:-len("_double_slab")] + "_slab"
 
         return None
+
+    def _get_raw_double_slab_export_multiplier(
+        self,
+        raw_block,
+        raw_scan_key: Optional[str],
+        export_key: Optional[str],
+    ) -> int:
+        """
+        Returns a safety-net multiplier for generic double-slab states.
+
+        Exact ``*_double_slab`` identities are already converted and doubled by
+        :meth:`_record_export_count`. This helper only handles a generic
+        ``type=double`` block that still resolves to a regular slab item, so the
+        operation never loses one of the two slab items when unusual blocks are
+        disabled.
+        """
+        if self.include_unusual.GetValue():
+            return 1
+
+        if not self._is_double_slab_state(raw_block, raw_scan_key):
+            return 1
+
+        normalized_export_key = self._normalize_conversion_identifier(
+            export_key or ""
+        )
+        if normalized_export_key is None:
+            return 1
+
+        if self._get_double_slab_export_item(normalized_export_key):
+            return 1
+
+        if normalized_export_key.endswith("_slab"):
+            return 2
+
+        return 1
 
     def _record_export_count(self, counts: Dict[str, int], item_name: str, amount: int = 1) -> None:
         """
@@ -5171,6 +6628,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return NBTFile(the_nbt)
 
+    # ---------------------------------------------------------------------
+    # Display-name data, settings and managed-file helpers
+    # ---------------------------------------------------------------------
     def _normalize_display_name_for_audit(self, value: str) -> str:
         """
         Normalizes text only for display-name audit comparison.
@@ -5191,13 +6651,14 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     def _reset_external_language_operation_state(self) -> None:
         """
-        Clears per-operation external language usage and write statistics.
+        Clears per-operation display-name usage and cache-sync statistics.
         """
         self._external_language_used = {}
         self._found_entries_used = {}
         self._pending_found_entries = {}
         self._found_entries_write_error = ""
         self._found_entries_written_count = 0
+        self._found_entries_sync_queued_count = 0
         self._external_language_prepared = False
         self._display_name_resolution_cache = {}
 
@@ -5213,6 +6674,40 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._found_entries_used = {}
         self._pending_found_entries = {}
         self._display_name_resolution_cache = {}
+
+    def _reset_conversion_operation_state(self) -> None:
+        """
+        Clears per-operation conversion-entry status before each export.
+        """
+        self._conversion_entries = {}
+        self._conversion_entries_used = {}
+        self._conversion_entries_skipped = {}
+        self._conversion_entries_skip_reason_counts = {}
+        self._conversion_entries_skip_details = []
+        self._conversion_entries_skip_detail_overflow = 0
+        self._conversion_entries_load_error = ""
+        self._conversion_entries_loaded_count = 0
+        self._conversion_entries_prepared = False
+        self._pending_conversion_candidates = collections.defaultdict(int)
+        self._conversion_candidates_written_count = 0
+        self._conversion_candidates_new_record_count = 0
+        self._conversion_candidates_updated_record_count = 0
+        self._conversion_candidate_observations_added_count = 0
+        self._conversion_candidates_existing_record_count = 0
+        self._conversion_candidates_total_record_count = 0
+        self._conversion_candidates_write_error = ""
+
+    def _release_operation_conversion_caches(self) -> None:
+        """
+        Releases per-operation conversion-entry data after reporting.
+        """
+        self._conversion_entries = {}
+        self._conversion_entries_used = {}
+        self._conversion_entries_skipped = {}
+        self._conversion_entries_skip_reason_counts = {}
+        self._conversion_entries_skip_details = []
+        self._conversion_entries_skip_detail_overflow = 0
+        self._pending_conversion_candidates = collections.defaultdict(int)
 
     def _normalize_language_alias(self, value: str) -> str:
         """
@@ -5299,37 +6794,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         except Exception:
             return Path.cwd()
 
-    def _get_plugin_created_display_name_paths(self) -> List[Path]:
-        """
-        Returns plugin-created display-name files and folders that may exist.
-
-        This method only identifies locations owned by Blocks to Storage. It
-        never includes Minecraft language files, worlds, reports or the plugin.
-        """
-        plugin_file = self._get_plugin_directory() / self.FOUND_ENTRIES_FILENAME
-        fallback_directory = Path.home() / ".blocks_to_storage"
-        fallback_file = fallback_directory / self.FOUND_ENTRIES_FILENAME
-
-        paths: List[Path] = []
-        seen = set()
-
-        for candidate in (
-            plugin_file,
-            fallback_file,
-            fallback_directory,
-        ):
-            candidate_text = str(candidate)
-            if candidate_text in seen:
-                continue
-            seen.add(candidate_text)
-
-            try:
-                if candidate.exists():
-                    paths.append(candidate)
-            except Exception:
-                continue
-
-        return paths
 
     def _clear_loaded_display_name_data(self) -> None:
         """
@@ -5348,118 +6812,1435 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._pending_found_entries = {}
         self._found_entries_write_error = ""
         self._found_entries_written_count = 0
+        self._found_entries_sync_queued_count = 0
         self._external_language_prepared = False
         self._display_name_resolution_cache = {}
 
-    def _delete_plugin_created_display_name_data(self, _) -> None:
+    def _get_settings_config_path(self) -> Path:
         """
-        Confirms and deletes only plugin-created display-name data.
+        Returns the single active settings file location.
 
-        Exact local paths are shown in the interactive confirmation window so
-        users may inspect or delete them manually. These paths are not added to
-        export reports, preserving report privacy by default.
+        Missing parent directories are created only when a settings write is
+        required. The path uses LOCALAPPDATA instead of a hard-coded username.
         """
-        found_paths = self._get_plugin_created_display_name_paths()
+        local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+        if local_app_data:
+            root = Path(local_app_data)
+        else:
+            root = Path.home() / "AppData" / "Local"
 
-        if not found_paths:
+        return (
+            root
+            / "AmuletTeam"
+            / "AmuletMapEditor"
+            / "Config"
+            / "plugins"
+            / "edit_plugins"
+            / self.SETTINGS_CONFIG_FILENAME
+        )
+
+    def _settings_control_registry(self):
+        """
+        Returns stable config keys mapped to user-controlled wx controls.
+
+        Attribute names are used as stable internal keys so visible labels may
+        change without breaking settings saved by older plugin versions.
+        """
+        control_names = (
+            "storage_choice",
+            "shulker_color_choice",
+            "use_double_chests",
+            "stack_height",
+            "include_unusual",
+            "preserve_bedrock",
+            "alphabetical_order",
+            "separate_types",
+            "add_group_item_frames",
+            "group_spacing",
+            "use_nested_shulker_storage",
+            "nested_shulker_mode_choice",
+            "nested_shulker_color_choice",
+            "fast_direct_scan",
+            "fast_direct_clear",
+            "show_large_selection_warning",
+            "use_found_entries_cache",
+            "use_installed_language_data",
+            "auto_detect_language_file",
+            "language_file_path",
+            "save_found_language_entries",
+            "simulate_missing_display_name",
+            "simulated_missing_alias",
+            "use_conversion_entries",
+            "include_item_frame_audit",
+            "include_display_name_audit",
+            "include_amulet_conversion_diagnostic",
+            "include_amulet_translator_probe",
+            "use_reviewed_amulet_normalization",
+            "record_conversion_candidates",
+            "attempt_unresolved_item_writes",
+            "include_amulet_conversion_audit",
+            "record_all_conversion_observations",
+        )
+
+        registry = {}
+        for name in control_names:
+            control = getattr(self, name, None)
+            if control is not None:
+                registry[name] = control
+        return registry
+
+    def _read_settings_control_value(self, control):
+        """
+        Converts a supported wx control value into JSON-safe data.
+        """
+        if isinstance(control, wx.CheckBox):
+            return bool(control.GetValue())
+        if isinstance(control, wx.Choice):
+            return str(control.GetStringSelection())
+        if isinstance(control, wx.SpinCtrl):
+            return int(control.GetValue())
+        if isinstance(control, wx.TextCtrl):
+            return str(control.GetValue())
+        raise TypeError(f"Unsupported settings control: {type(control)!r}")
+
+    def _apply_settings_control_value(self, control, value) -> bool:
+        """
+        Applies one validated saved value to a supported wx control.
+        """
+        try:
+            if isinstance(control, wx.CheckBox):
+                if not isinstance(value, bool):
+                    return False
+                control.SetValue(value)
+                return True
+
+            if isinstance(control, wx.Choice):
+                if not isinstance(value, str):
+                    return False
+                index = control.FindString(value)
+                if index == wx.NOT_FOUND:
+                    return False
+                control.SetSelection(index)
+                return True
+
+            if isinstance(control, wx.SpinCtrl):
+                if isinstance(value, bool) or not isinstance(value, int):
+                    return False
+                minimum = control.GetMin()
+                maximum = control.GetMax()
+                if value < minimum or value > maximum:
+                    return False
+                control.SetValue(value)
+                return True
+
+            if isinstance(control, wx.TextCtrl):
+                if not isinstance(value, str):
+                    return False
+                control.SetValue(value)
+                return True
+        except Exception:
+            return False
+
+        return False
+
+    def _collect_current_settings_config(self) -> dict:
+        """
+        Collects current control values and collapsible category states.
+        """
+        settings = {}
+        for key, control in self._settings_control_registry().items():
+            try:
+                settings[key] = self._read_settings_control_value(control)
+            except Exception:
+                continue
+
+        ui_state = {}
+        for label, section in self._collapsible_settings_sections.items():
+            try:
+                header, _ = section
+                ui_state[label] = bool(header.GetValue())
+            except Exception:
+                continue
+
+        return {
+            "format_version": self.SETTINGS_CONFIG_FORMAT_VERSION,
+            "plugin": "Blocks to Storage",
+            "settings": settings,
+            "ui_state": ui_state,
+        }
+
+    def _capture_settings_defaults(self) -> None:
+        """
+        Captures the plugin-defined defaults before saved values are applied.
+        """
+        self._settings_defaults = self._collect_current_settings_config()
+
+    def _load_settings_config_data(self, path: Path) -> Optional[dict]:
+        """
+        Loads and validates the JSON config without modifying it.
+        """
+        try:
+            if not path.is_file():
+                return None
+            if path.stat().st_size > self.MAX_SETTINGS_CONFIG_BYTES:
+                raise ValueError("settings file exceeds the 1 MiB safety limit")
+
+            with path.open("r", encoding="utf-8-sig") as handle:
+                data = json.load(handle)
+
+            if not isinstance(data, dict):
+                raise ValueError("top-level JSON value must be an object")
+            if not isinstance(data.get("settings", {}), dict):
+                raise ValueError("'settings' must be a JSON object")
+            if not isinstance(data.get("ui_state", {}), dict):
+                raise ValueError("'ui_state' must be a JSON object")
+            return data
+        except Exception as exc:
+            self._settings_config_load_error = str(exc)
+            return None
+
+    def _apply_settings_config_data(self, data: dict) -> None:
+        """
+        Applies recognized values while preserving unknown future keys.
+        """
+        self._settings_config_applying = True
+        try:
+            saved_settings = data.get("settings", {})
+            for key, control in self._settings_control_registry().items():
+                if key in saved_settings:
+                    self._apply_settings_control_value(
+                        control,
+                        saved_settings[key],
+                    )
+
+            saved_ui_state = data.get("ui_state", {})
+            for label, expanded in saved_ui_state.items():
+                section = self._collapsible_settings_sections.get(label)
+                if section is None or not isinstance(expanded, bool):
+                    continue
+                header, _ = section
+                header.SetValue(expanded)
+
+            self._settings_config_unknown_data = dict(data)
+
+            self._on_storage_choice_changed(None)
+            self._on_separate_types_changed(None)
+            self._on_nested_shulker_storage_changed(None)
+            self._on_display_name_dependency_changed(None)
+            self._on_installed_language_data_changed(None)
+            self._on_auto_detect_language_file_changed(None)
+            self._on_simulate_missing_display_name_changed(None)
+
+            for label in self._collapsible_settings_sections:
+                self._update_collapsible_settings_section(label)
+            self._update_option_visibility()
+        finally:
+            self._settings_config_applying = False
+
+    def _merge_settings_config_data(
+        self,
+        existing: Optional[dict],
+    ) -> dict:
+        """
+        Preserves unknown keys while updating every recognized current value.
+        """
+        merged = dict(existing) if isinstance(existing, dict) else {}
+        current = self._collect_current_settings_config()
+
+        merged["format_version"] = self.SETTINGS_CONFIG_FORMAT_VERSION
+        merged["plugin"] = "Blocks to Storage"
+
+        existing_settings = merged.get("settings")
+        if not isinstance(existing_settings, dict):
+            existing_settings = {}
+        existing_settings.update(current["settings"])
+        merged["settings"] = existing_settings
+
+        existing_ui_state = merged.get("ui_state")
+        if not isinstance(existing_ui_state, dict):
+            existing_ui_state = {}
+        existing_ui_state.update(current["ui_state"])
+        merged["ui_state"] = existing_ui_state
+        return merged
+
+    def _write_settings_config(
+        self,
+        create_if_missing: bool = True,
+    ) -> bool:
+        """
+        Atomically writes the current settings to the single active config.
+        """
+        if self._settings_config_applying:
+            return False
+
+        path = self._get_settings_config_path()
+        if not create_if_missing and not path.is_file():
+            return False
+
+        existing = None
+        if path.is_file():
+            existing = self._load_settings_config_data(path)
+            if existing is None and self._settings_config_load_error:
+                self._settings_config_write_error = (
+                    "The existing settings file is malformed or unreadable. "
+                    "It was preserved and was not overwritten."
+                )
+                return False
+
+        merged = self._merge_settings_config_data(existing)
+        content = json.dumps(
+            merged,
+            indent=2,
+            ensure_ascii=False,
+            sort_keys=True,
+        ) + "\n"
+
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._write_text_atomically(
+                path,
+                content,
+                replace_existing=True,
+            )
+            self._settings_config_unknown_data = merged
+            self._settings_config_load_error = ""
+            self._settings_config_write_error = ""
+            return True
+        except Exception as exc:
+            self._settings_config_write_error = str(exc)
+            return False
+
+    def _schedule_settings_config_save(self, event=None) -> None:
+        """
+        Restarts the 500 ms save delay after a user-controlled setting changes.
+        """
+        if self._settings_config_applying:
+            try:
+                if event is not None:
+                    event.Skip()
+            except Exception:
+                pass
+            return
+
+        pending = self._settings_config_save_call
+        if pending is not None:
+            try:
+                pending.Stop()
+            except Exception:
+                pass
+
+        try:
+            self._settings_config_save_call = wx.CallLater(
+                self.SETTINGS_SAVE_DELAY_MS,
+                self._save_settings_config_after_delay,
+            )
+        except Exception:
+            self._write_settings_config(create_if_missing=True)
+
+        try:
+            if event is not None:
+                event.Skip()
+        except Exception:
+            pass
+
+    def _save_settings_config_after_delay(self) -> None:
+        """
+        Writes settings after the debounce delay expires.
+        """
+        self._settings_config_save_call = None
+        self._write_settings_config(create_if_missing=True)
+
+    def _bind_settings_persistence_events(self) -> None:
+        """
+        Binds automatic persistence to every supported user-controlled field.
+        """
+        for control in self._settings_control_registry().values():
+            try:
+                if isinstance(control, wx.CheckBox):
+                    control.Bind(
+                        wx.EVT_CHECKBOX,
+                        self._schedule_settings_config_save,
+                    )
+                elif isinstance(control, wx.Choice):
+                    control.Bind(
+                        wx.EVT_CHOICE,
+                        self._schedule_settings_config_save,
+                    )
+                elif isinstance(control, wx.SpinCtrl):
+                    control.Bind(
+                        wx.EVT_SPINCTRL,
+                        self._schedule_settings_config_save,
+                    )
+                    control.Bind(
+                        wx.EVT_TEXT,
+                        self._schedule_settings_config_save,
+                    )
+                elif isinstance(control, wx.TextCtrl):
+                    control.Bind(
+                        wx.EVT_TEXT,
+                        self._schedule_settings_config_save,
+                    )
+            except Exception:
+                continue
+
+    def _initialize_settings_persistence(self) -> None:
+        """
+        Captures defaults, loads saved settings, and enables automatic saving.
+        """
+        self._capture_settings_defaults()
+        path = self._get_settings_config_path()
+        data = self._load_settings_config_data(path)
+
+        if data is not None:
+            self._apply_settings_config_data(data)
+            # Add defaults for settings introduced by newer plugin versions
+            # while preserving unknown keys written by other versions.
+            self._write_settings_config(create_if_missing=False)
+
+        self._bind_settings_persistence_events()
+
+    def _reset_settings_to_defaults(self) -> None:
+        """
+        Applies current plugin defaults and rewrites the active config.
+        """
+        defaults = self._settings_defaults
+        if not isinstance(defaults, dict):
+            return
+
+        self._apply_settings_config_data(defaults)
+        self._write_settings_config(create_if_missing=True)
+
+    def _repair_json_missing_line_commas(self, content: str) -> str:
+        """
+        Adds commas between adjacent JSON object entries when clearly missing.
+
+        This is intentionally conservative. It only changes a line when the
+        previous line appears to contain a complete value and the next
+        non-empty line begins with another quoted object key.
+        """
+        lines = content.splitlines()
+        repaired = list(lines)
+
+        for index, line in enumerate(lines[:-1]):
+            current = line.rstrip()
+            stripped = current.strip()
+            if not stripped:
+                continue
+            if stripped.endswith((",", "{", "[", ":")):
+                continue
+
+            next_index = index + 1
+            while next_index < len(lines) and not lines[next_index].strip():
+                next_index += 1
+            if next_index >= len(lines):
+                continue
+
+            next_stripped = lines[next_index].lstrip()
+            if not next_stripped.startswith('"'):
+                continue
+
+            if (
+                stripped.endswith(("}", "]", '"'))
+                or re.search(r"(?:true|false|null|-?\d+(?:\.\d+)?)$", stripped)
+            ):
+                repaired[index] = current + ","
+
+        return "\n".join(repaired)
+
+    def _attempt_parse_repaired_settings_config(
+        self,
+        content: str,
+    ) -> Tuple[Optional[dict], List[str]]:
+        """
+        Attempts bounded, conservative repairs and returns applied repair names.
+        """
+        attempts = []
+
+        def try_json(candidate: str, repair_name: str):
+            """
+            Parses a repair candidate and records the successful repair label.
+            """
+            try:
+                data = json.loads(candidate)
+                if isinstance(data, dict):
+                    if repair_name:
+                        attempts.append(repair_name)
+                    return data, candidate
+            except Exception:
+                pass
+            return None, candidate
+
+        normalized = content.lstrip("\ufeff")
+
+        data, normalized = try_json(normalized, "")
+        if data is not None:
+            return data, attempts
+
+        without_trailing_commas = re.sub(
+            r",(\s*[}\]])",
+            r"\1",
+            normalized,
+        )
+        data, without_trailing_commas = try_json(
+            without_trailing_commas,
+            "removed trailing commas",
+        )
+        if data is not None:
+            return data, attempts
+
+        with_line_commas = self._repair_json_missing_line_commas(
+            without_trailing_commas
+        )
+        data, with_line_commas = try_json(
+            with_line_commas,
+            "restored missing entry commas",
+        )
+        if data is not None:
+            return data, attempts
+
+        # A Python-literal fallback can recover files edited with single quotes,
+        # True / False / None, or a trailing comma. It remains data-only and
+        # does not execute code.
+        try:
+            literal_data = ast.literal_eval(with_line_commas)
+            if isinstance(literal_data, dict):
+                attempts.append("normalized Python-style JSON values")
+                return literal_data, attempts
+        except Exception:
+            pass
+
+        return None, attempts
+
+    def _validate_repaired_settings_config(self, data: dict) -> Tuple[bool, str]:
+        """
+        Validates the minimum structure required for a safe settings repair.
+        """
+        if not isinstance(data, dict):
+            return False, "The top-level value is not an object."
+
+        settings = data.get("settings", {})
+        ui_state = data.get("ui_state", {})
+        if not isinstance(settings, dict):
+            return False, "The settings entry is not an object."
+        if not isinstance(ui_state, dict):
+            return False, "The ui_state entry is not an object."
+
+        return True, ""
+
+    def _merge_recovered_settings_config_data(
+        self,
+        recovered: dict,
+    ) -> dict:
+        """
+        Preserves recovered values and adds only missing current defaults.
+
+        Unlike normal automatic saving, repair must not replace recovered
+        settings with the currently displayed UI state because the UI may be
+        showing defaults after a malformed config failed to load.
+        """
+        merged = dict(recovered) if isinstance(recovered, dict) else {}
+        defaults = (
+            self._settings_defaults
+            if isinstance(self._settings_defaults, dict)
+            else self._collect_current_settings_config()
+        )
+
+        merged["format_version"] = self.SETTINGS_CONFIG_FORMAT_VERSION
+        merged["plugin"] = "Blocks to Storage"
+
+        recovered_settings = merged.get("settings")
+        if not isinstance(recovered_settings, dict):
+            recovered_settings = {}
+
+        default_settings = defaults.get("settings", {})
+        if isinstance(default_settings, dict):
+            for key, value in default_settings.items():
+                recovered_settings.setdefault(key, value)
+        merged["settings"] = recovered_settings
+
+        recovered_ui_state = merged.get("ui_state")
+        if not isinstance(recovered_ui_state, dict):
+            recovered_ui_state = {}
+
+        default_ui_state = defaults.get("ui_state", {})
+        if isinstance(default_ui_state, dict):
+            for key, value in default_ui_state.items():
+                recovered_ui_state.setdefault(key, value)
+        merged["ui_state"] = recovered_ui_state
+
+        return merged
+
+    def _repair_existing_settings_config(self) -> None:
+        """
+        Manually repairs the active config without deleting unknown entries.
+
+        The original file is replaced only after a complete repaired version
+        has been parsed, validated, merged, and written atomically.
+        """
+        path = self._get_settings_config_path()
+        if not path.is_file():
             wx.MessageBox(
-                "No plugin-created display-name files or folders were found.",
+                "No active Blocks to Storage settings file was found.",
                 "Blocks to Storage",
                 wx.OK | wx.ICON_INFORMATION,
                 self,
             )
             return
 
-        listed_paths = "\n".join(
-            f"• {path}"
-            for path in found_paths
-        )
-        message = (
-            "Blocks to Storage found the following plugin-created data:\n\n"
-            f"{listed_paths}\n\n"
-            "Only these listed files and the plugin-created fallback folder "
-            "will be deleted. The fallback folder is removed only if it is "
-            "empty after its cache file is deleted.\n\n"
-            "The plugin, Minecraft language files, worlds and export reports "
-            "will not be deleted. You may cancel and use the paths above to "
-            "delete files manually or selectively.\n\n"
-            "Continue?"
-        )
+        try:
+            if path.stat().st_size > self.MAX_SETTINGS_CONFIG_BYTES:
+                raise ValueError("The settings file exceeds the 1 MiB safety limit.")
+            content = path.read_text(
+                encoding="utf-8-sig",
+                errors="strict",
+            )
+        except Exception as exc:
+            wx.MessageBox(
+                f"The settings file could not be read.\n\nReason: {exc}",
+                "Blocks to Storage",
+                wx.OK | wx.ICON_WARNING,
+                self,
+            )
+            return
 
-        dialog = wx.MessageDialog(
+        repaired_data, repairs = self._attempt_parse_repaired_settings_config(
+            content
+        )
+        if repaired_data is None:
+            wx.MessageBox(
+                "The settings file could not be repaired safely.\n\n"
+                "No changes were made. Correct the JSON manually or import a "
+                "known-good settings file.",
+                "Blocks to Storage",
+                wx.OK | wx.ICON_WARNING,
+                self,
+            )
+            return
+
+        valid, reason = self._validate_repaired_settings_config(repaired_data)
+        if not valid:
+            wx.MessageBox(
+                "The settings file could not be repaired safely.\n\n"
+                f"Reason: {reason}\n\nNo changes were made.",
+                "Blocks to Storage",
+                wx.OK | wx.ICON_WARNING,
+                self,
+            )
+            return
+
+        confirmation_lines = [
+            "Repair and normalize the active settings file?",
+            "",
+            "Recognized settings will be validated.",
+            "Unknown entries will be preserved.",
+            "Missing current settings will be added with their defaults.",
+            "The repaired file will atomically replace the existing file.",
+        ]
+        if repairs:
+            confirmation_lines.extend(
+                [
+                    "",
+                    "Detected repairs:",
+                    *[f"• {repair}" for repair in repairs],
+                ]
+            )
+        else:
+            confirmation_lines.extend(
+                [
+                    "",
+                    "The JSON is readable. The file will be normalized and "
+                    "merged with the current setting structure.",
+                ]
+            )
+
+        confirmation = wx.MessageDialog(
             self,
-            message,
-            "Delete plugin-created display-name data?",
+            "\n".join(confirmation_lines),
+            "Repair settings config?",
             wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
         )
+        try:
+            if confirmation.ShowModal() != wx.ID_YES:
+                return
+        finally:
+            confirmation.Destroy()
+
+        merged = self._merge_recovered_settings_config_data(repaired_data)
+        normalized_content = json.dumps(
+            merged,
+            indent=2,
+            ensure_ascii=False,
+            sort_keys=True,
+        ) + "\n"
 
         try:
-            if dialog.ShowModal() != wx.ID_YES:
+            self._write_text_atomically(
+                path,
+                normalized_content,
+                replace_existing=True,
+            )
+        except Exception as exc:
+            wx.MessageBox(
+                f"The repaired settings file could not be written.\n\nReason: {exc}",
+                "Blocks to Storage",
+                wx.OK | wx.ICON_WARNING,
+                self,
+            )
+            return
+
+        self._settings_config_load_error = ""
+        self._settings_config_write_error = ""
+        self._settings_config_unknown_data = merged
+        self._apply_settings_config_data(merged)
+
+        wx.MessageBox(
+            "The settings file was repaired and reloaded successfully.",
+            "Blocks to Storage",
+            wx.OK | wx.ICON_INFORMATION,
+            self,
+        )
+
+    def _import_settings_config(self) -> None:
+        """
+        Imports a JSON-backed config into the stable active config location.
+        """
+        dialog = wx.FileDialog(
+            self,
+            "Import Blocks to Storage settings",
+            wildcard="Blocks to Storage config (*.config)|*.config|All files (*.*)|*.*",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        )
+        try:
+            if dialog.ShowModal() != wx.ID_OK:
                 return
+            source_path = Path(dialog.GetPath())
         finally:
             dialog.Destroy()
 
-        deleted: List[Path] = []
-        failed: List[Tuple[Path, str]] = []
-
-        files = [
-            path
-            for path in found_paths
-            if path.name == self.FOUND_ENTRIES_FILENAME
-        ]
-        folders = [
-            path
-            for path in found_paths
-            if path.name == ".blocks_to_storage"
-        ]
-
-        for file_path in files:
-            try:
-                if file_path.is_file():
-                    file_path.unlink()
-                    deleted.append(file_path)
-            except Exception as exc:
-                failed.append((file_path, str(exc)))
-
-        for folder_path in folders:
-            try:
-                if folder_path.is_dir() and not any(folder_path.iterdir()):
-                    folder_path.rmdir()
-                    deleted.append(folder_path)
-            except Exception as exc:
-                failed.append((folder_path, str(exc)))
-
-        self._clear_loaded_display_name_data()
-
-        result_lines = []
-        if deleted:
-            result_lines.append("Deleted:")
-            result_lines.extend(f"• {path}" for path in deleted)
-
-        if failed:
-            if result_lines:
-                result_lines.append("")
-            result_lines.append("Could not delete:")
-            result_lines.extend(
-                f"• {path}\n  Reason: {reason}"
-                for path, reason in failed
+        data = self._load_settings_config_data(source_path)
+        if data is None:
+            wx.MessageBox(
+                "The selected settings file could not be imported.\n\n"
+                f"Reason: {self._settings_config_load_error or 'Invalid file'}",
+                "Blocks to Storage",
+                wx.OK | wx.ICON_WARNING,
+                self,
             )
+            return
 
-        if not result_lines:
-            result_lines.append(
-                "No files were deleted. They may already have been removed."
+        self._apply_settings_config_data(data)
+        merged = self._merge_recovered_settings_config_data(data)
+        content = json.dumps(
+            merged,
+            indent=2,
+            ensure_ascii=False,
+            sort_keys=True,
+        ) + "\n"
+
+        try:
+            active_path = self._get_settings_config_path()
+            active_path.parent.mkdir(parents=True, exist_ok=True)
+            self._write_text_atomically(
+                active_path,
+                content,
+                replace_existing=True,
             )
+            self._settings_config_unknown_data = merged
+            self._settings_config_load_error = ""
+            self._settings_config_write_error = ""
+        except Exception as exc:
+            self._settings_config_write_error = str(exc)
+            wx.MessageBox(
+                "The settings were loaded, but the active settings file could "
+                "not be written.\n\n"
+                f"Reason: {self._settings_config_write_error}",
+                "Blocks to Storage",
+                wx.OK | wx.ICON_WARNING,
+                self,
+            )
+            return
 
         wx.MessageBox(
-            "\n".join(result_lines),
+            "Settings imported successfully.",
             "Blocks to Storage",
-            wx.OK | (
-                wx.ICON_WARNING
-                if failed
-                else wx.ICON_INFORMATION
-            ),
+            wx.OK | wx.ICON_INFORMATION,
             self,
         )
+
+    def _export_settings_config(self) -> None:
+        """
+        Exports a backup copy without changing the active config location.
+        """
+        dialog = wx.FileDialog(
+            self,
+            "Export Blocks to Storage settings",
+            defaultFile=self.SETTINGS_CONFIG_FILENAME,
+            wildcard="Blocks to Storage config (*.config)|*.config|All files (*.*)|*.*",
+            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
+        )
+        try:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            destination = Path(dialog.GetPath())
+        finally:
+            dialog.Destroy()
+
+        existing = self._load_settings_config_data(
+            self._get_settings_config_path()
+        )
+        merged = self._merge_settings_config_data(existing)
+        content = json.dumps(
+            merged,
+            indent=2,
+            ensure_ascii=False,
+            sort_keys=True,
+        ) + "\n"
+
+        try:
+            self._write_text_atomically(
+                destination,
+                content,
+                replace_existing=True,
+            )
+        except Exception as exc:
+            wx.MessageBox(
+                f"Could not export the settings file.\n\nReason: {exc}",
+                "Blocks to Storage",
+                wx.OK | wx.ICON_WARNING,
+                self,
+            )
+            return
+
+        wx.MessageBox(
+            "Settings exported successfully.",
+            "Blocks to Storage",
+            wx.OK | wx.ICON_INFORMATION,
+            self,
+        )
+
+    def _plugin_managed_file_definitions(self):
+        """
+        Returns the local BTSP files exposed through the file manager.
+        """
+        return [
+            (
+                self.SETTINGS_CONFIG_FILENAME,
+                "Saved plugin settings",
+            ),
+            (
+                self.FOUND_ENTRIES_FILENAME,
+                "Discovered display-name entries",
+            ),
+            (
+                self.CONVERSION_ENTRIES_FILENAME,
+                "Reviewed active conversion rules",
+            ),
+            (
+                self.CONVERSION_CANDIDATES_FILENAME,
+                "Inactive conversion observations",
+            ),
+        ]
+
+    def _get_managed_file_candidates(self, filename: str) -> List[Path]:
+        """
+        Returns possible managed-file locations without creating anything.
+        """
+        if filename == self.SETTINGS_CONFIG_FILENAME:
+            return [self._get_settings_config_path()]
+
+        return [
+            self._get_plugin_directory() / filename,
+            Path.home() / ".blocks_to_storage" / filename,
+        ]
+
+    def _choose_writable_managed_file_path(
+        self,
+        filename: str,
+    ) -> Optional[Path]:
+        """
+        Chooses a writable local path without creating the requested file.
+        """
+        if filename == self.SETTINGS_CONFIG_FILENAME:
+            try:
+                path = self._get_settings_config_path()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                return path
+            except Exception:
+                return None
+
+        for directory in (
+            self._get_plugin_directory(),
+            Path.home() / ".blocks_to_storage",
+        ):
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+                probe = directory / ".btsp_write_test.tmp"
+                probe.write_text("test", encoding="utf-8")
+                probe.unlink()
+                return directory / filename
+            except Exception:
+                continue
+        return None
+
+    def _managed_file_template(self, filename: str) -> str:
+        """
+        Returns the documented template used for explicit file creation.
+        """
+        if filename == self.SETTINGS_CONFIG_FILENAME:
+            return json.dumps(
+                self._merge_settings_config_data(None),
+                indent=2,
+                ensure_ascii=False,
+                sort_keys=True,
+            ) + "\n"
+        if filename == self.CONVERSION_ENTRIES_FILENAME:
+            return (
+                "# Blocks to Storage reviewed conversion rules\n"
+                "# Rules in this file affect exported items.\n"
+                "# The plugin reads this file but never writes active rules to it.\n"
+                "# Add only mappings that have been reviewed and tested.\n"
+                "# Format: minecraft:source=minecraft:target\n"
+            )
+        if filename == self.CONVERSION_CANDIDATES_FILENAME:
+            return (
+                "# Blocks to Storage inactive conversion candidates\n"
+                "# These observations never affect exports.\n"
+                "# Existing observations are read only so counts can be merged.\n"
+                "# Built-in resolved families are omitted unless advanced recording is enabled\n"
+                "# or an external language-assisted identity recovery is recorded.\n"
+                "# Format version: 1\n"
+                "# source<TAB>target<TAB>source properties<TAB>observations\n"
+            )
+        return (
+            "# Blocks to Storage discovered display-name entries\n"
+            "# Format: language_key=Display Name\n"
+        )
+
+    def _managed_file_authority(self, filename: str) -> str:
+        """
+        Returns a concise description of how a managed file affects exports.
+        """
+        if filename == self.SETTINGS_CONFIG_FILENAME:
+            return "User preferences"
+        if filename == self.CONVERSION_ENTRIES_FILENAME:
+            return "Active rules"
+        if filename == self.CONVERSION_CANDIDATES_FILENAME:
+            return "Inactive observations"
+        return "Display-name cache"
+
+    def _managed_file_entry_status(
+        self,
+        filename: str,
+        path: Path,
+    ) -> Tuple[str, str]:
+        """
+        Returns an approximate entry count and structural status.
+        """
+        try:
+            content = path.read_text(
+                encoding="utf-8-sig",
+                errors="replace",
+            )
+        except Exception as exc:
+            return "Unknown", f"Read error: {exc}"
+
+        if filename == self.SETTINGS_CONFIG_FILENAME:
+            try:
+                data = json.loads(content)
+                if not isinstance(data, dict):
+                    raise ValueError("top-level value is not an object")
+                settings = data.get("settings", {})
+                ui_state = data.get("ui_state", {})
+                if not isinstance(settings, dict) or not isinstance(
+                    ui_state,
+                    dict,
+                ):
+                    raise ValueError("settings or ui_state is not an object")
+                count = len(settings) + len(ui_state)
+                return f"{count:,}", "Valid"
+            except Exception as exc:
+                return "Unknown", f"Malformed: {exc}"
+
+        entries = 0
+        malformed = 0
+        for line in content.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+
+            entries += 1
+            if filename == self.CONVERSION_CANDIDATES_FILENAME:
+                if len(line.split("\t")) != 4:
+                    malformed += 1
+            elif filename == self.CONVERSION_ENTRIES_FILENAME:
+                if "->" not in line and "\t" not in line:
+                    malformed += 1
+
+        status = "Valid" if malformed == 0 else f"Malformed: {malformed}"
+        return f"{entries:,}", status
+
+    def _managed_file_access_status(self, path: Path) -> str:
+        """
+        Reports file access using wording suitable for the manager dialog.
+        """
+        try:
+            mode = path.stat().st_mode
+            read_only = not bool(mode & stat.S_IWRITE)
+            readable = os.access(str(path), os.R_OK)
+            writable = os.access(str(path), os.W_OK) and not read_only
+        except Exception:
+            return "Unknown"
+
+        if readable and writable:
+            return "Read & Write"
+        if readable:
+            return "Read Only"
+        if writable:
+            return "Write Only"
+        return "No Access"
+
+    def _managed_file_status_label(
+        self,
+        filename: str,
+        description: str,
+    ) -> str:
+        """
+        Builds one compact file-manager status row.
+        """
+        existing_paths = [
+            path
+            for path in self._get_managed_file_candidates(filename)
+            if path.is_file()
+        ]
+        authority = self._managed_file_authority(filename)
+
+        if not existing_paths:
+            return (
+                f"{filename} | Not found | Access: Not applicable | Entries: 0 | "
+                f"Authority: {authority} | {description}"
+            )
+
+        path = existing_paths[0]
+        try:
+            size_text = f"{path.stat().st_size:,} bytes"
+        except Exception:
+            size_text = "Unknown"
+
+        entry_count, structure_status = self._managed_file_entry_status(
+            filename,
+            path,
+        )
+        access_status = self._managed_file_access_status(path)
+        return (
+            f"{filename} | Exists | Size: {size_text} | "
+            f"Entries: {entry_count} | Access: {access_status} | "
+            f"Status: {structure_status} | Authority: {authority}"
+        )
+
+    def _show_plugin_file_action_dialog(
+        self,
+        actions: Sequence[Tuple[str, str]],
+    ) -> Optional[int]:
+        """
+        Shows the main plugin-file manager action picker.
+
+        The selected action description is displayed above the list so users
+        can inspect an option before opening that workflow. The description
+        area has a fixed height so changing selections does not shift the
+        option list up or down.
+        """
+        dialog_parent = wx.GetTopLevelParent(self) or self
+        dialog = wx.Dialog(
+            dialog_parent,
+            title="Manage plugin files",
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
+        )
+        try:
+            outer_sizer = wx.BoxSizer(wx.VERTICAL)
+
+            description_panel = wx.Panel(dialog)
+            description_panel.SetMinSize((420, 72))
+            description_sizer = wx.BoxSizer(wx.VERTICAL)
+            description_label = wx.StaticText(
+                description_panel,
+                label="Choose what to do with plugin-managed files.",
+            )
+            description_label.Wrap(420)
+            description_sizer.Add(
+                description_label,
+                1,
+                wx.ALL | wx.EXPAND,
+                0,
+            )
+            description_panel.SetSizer(description_sizer)
+            outer_sizer.Add(
+                description_panel,
+                0,
+                wx.ALL | wx.EXPAND,
+                10,
+            )
+
+            action_list = wx.ListBox(
+                dialog,
+                choices=[label for label, _description in actions],
+                style=wx.LB_SINGLE,
+            )
+            outer_sizer.Add(
+                action_list,
+                1,
+                wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+                10,
+            )
+
+            button_sizer = wx.StdDialogButtonSizer()
+            ok_button = wx.Button(dialog, wx.ID_OK, "Open")
+            close_button = wx.Button(dialog, wx.ID_CANCEL, "Close")
+            ok_button.Disable()
+            button_sizer.AddButton(ok_button)
+            button_sizer.AddButton(close_button)
+            button_sizer.Realize()
+            outer_sizer.Add(
+                button_sizer,
+                0,
+                wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.ALIGN_RIGHT,
+                10,
+            )
+
+            def update_description(_event=None) -> None:
+                selection = action_list.GetSelection()
+                if selection == wx.NOT_FOUND:
+                    description_label.SetLabel(
+                        "Choose what to do with plugin-managed files."
+                    )
+                    ok_button.Disable()
+                else:
+                    description_label.SetLabel(actions[selection][1])
+                    ok_button.Enable()
+                description_label.Wrap(420)
+                description_panel.Layout()
+
+            action_list.Bind(wx.EVT_LISTBOX, update_description)
+            action_list.Bind(
+                wx.EVT_LISTBOX_DCLICK,
+                lambda _event: dialog.EndModal(wx.ID_OK)
+                if action_list.GetSelection() != wx.NOT_FOUND
+                else None,
+            )
+
+            dialog.SetSizerAndFit(outer_sizer)
+            dialog.SetMinSize((470, 380))
+            dialog.SetSize((520, 390))
+            try:
+                dialog.CentreOnParent()
+            except Exception:
+                dialog.Centre()
+
+            if dialog.ShowModal() != wx.ID_OK:
+                return None
+
+            selection = action_list.GetSelection()
+            if selection == wx.NOT_FOUND:
+                return None
+            return int(selection)
+        finally:
+            dialog.Destroy()
+
+    def _manage_plugin_files(self, _) -> None:
+        """
+        Manages plugin settings and optional local data files.
+
+        Secondary dialogs return to the main action menu through a Back button.
+        """
+        while True:
+            definitions = self._plugin_managed_file_definitions()
+            labels = [
+                self._managed_file_status_label(filename, description)
+                for filename, description in definitions
+            ]
+
+            actions = [
+                (
+                    "Create selected files",
+                    "Create missing plugin-managed files without replacing existing ones. "
+                    "These local files can support display-name sorting, approved "
+                    "conversion rules, diagnostic candidates and saved settings.",
+                ),
+                (
+                    "Delete selected files",
+                    "Remove selected plugin-managed files from local plugin or settings "
+                    "storage. This can clear cached names, conversion data, candidates "
+                    "or saved settings, but it never deletes worlds or the plugin file.",
+                ),
+                (
+                    "Open plugin folder",
+                    "Open the local plugin folder used for optional BTSP data files, "
+                    "including found display-name entries, approved conversions and "
+                    "recorded conversion candidates.",
+                ),
+                (
+                    "Open settings folder",
+                    "Open the folder that stores the active Blocks to Storage settings "
+                    "config. This is separate from the optional BTSP data files.",
+                ),
+                (
+                    "Reset saved settings to defaults",
+                    "Replace the active settings config with current default settings "
+                    "and default collapsible UI states. Local BTSP data files are not "
+                    "deleted.",
+                ),
+                (
+                    "Attempt to repair existing settings config",
+                    "Try a conservative manual repair of the active settings config when "
+                    "simple editable JSON mistakes prevent it from loading.",
+                ),
+                (
+                    "Import settings...",
+                    "Copy a selected settings backup into the active config location. "
+                    "This updates saved settings only and does not change the active "
+                    "config path.",
+                ),
+                (
+                    "Export settings...",
+                    "Save a copy of the active settings config to a location you choose. "
+                    "This creates a backup for later import and does not move the "
+                    "active config.",
+                ),
+                (
+                    f"Update {self.FOUND_ENTRIES_FILENAME} from en_US.lang",
+                    "Scan the configured Minecraft en_US.lang file now and merge every "
+                    "safe tile, item and block display-name entry that is missing from "
+                    "the embedded table and the existing Found Entries cache.",
+                ),
+            ]
+            action = self._show_plugin_file_action_dialog(actions)
+            if action is None:
+                return
+
+            if action == 2:
+                try:
+                    wx.LaunchDefaultApplication(
+                        str(self._get_plugin_directory())
+                    )
+                except Exception as exc:
+                    wx.MessageBox(
+                        f"Could not open the plugin folder.\n\nReason: {exc}",
+                        "Blocks to Storage",
+                        wx.OK | wx.ICON_WARNING,
+                        self,
+                    )
+                continue
+
+            if action == 3:
+                try:
+                    settings_directory = self._get_settings_config_path().parent
+                    settings_directory.mkdir(parents=True, exist_ok=True)
+                    wx.LaunchDefaultApplication(str(settings_directory))
+                except Exception as exc:
+                    wx.MessageBox(
+                        f"Could not open the settings folder.\n\nReason: {exc}",
+                        "Blocks to Storage",
+                        wx.OK | wx.ICON_WARNING,
+                        self,
+                    )
+                continue
+
+            if action == 4:
+                confirmation = wx.MessageDialog(
+                    self,
+                    "Reset all Blocks to Storage settings to their current "
+                    "defaults?\n\nThe settings file will remain and will be "
+                    "rewritten with default values.",
+                    "Reset saved settings?",
+                    wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
+                )
+                try:
+                    if confirmation.ShowModal() == wx.ID_YES:
+                        self._reset_settings_to_defaults()
+                finally:
+                    confirmation.Destroy()
+                continue
+
+            if action == 5:
+                self._repair_existing_settings_config()
+                continue
+
+            if action == 6:
+                self._import_settings_config()
+                continue
+
+            if action == 7:
+                self._export_settings_config()
+                continue
+
+            if action == 8:
+                self._synchronize_found_entries_from_language_file()
+                continue
+
+            selection_dialog = wx.MultiChoiceDialog(
+                self,
+                "Select the plugin files to create or delete.\n\n"
+                "Choose Cancel to go back to the main file-management menu.",
+                "Manage plugin files - Select files / Back",
+                labels,
+            )
+            try:
+                back_button = selection_dialog.FindWindowById(wx.ID_CANCEL)
+                if back_button is not None:
+                    back_button.SetLabel("Back")
+                    back_button.SetToolTip(
+                        "Return to the main file-management menu."
+                    )
+                if selection_dialog.ShowModal() != wx.ID_OK:
+                    continue
+                selections = list(selection_dialog.GetSelections())
+            finally:
+                selection_dialog.Destroy()
+
+            if not selections:
+                wx.MessageBox(
+                    "No files were selected.",
+                    "Blocks to Storage",
+                    wx.OK | wx.ICON_INFORMATION,
+                    self,
+                )
+                continue
+
+            selected_names = [definitions[index][0] for index in selections]
+
+            if action == 0:
+                created = []
+                unchanged = []
+                failed = []
+
+                for filename in selected_names:
+                    existing = any(
+                        path.is_file()
+                        for path in self._get_managed_file_candidates(filename)
+                    )
+                    if existing:
+                        unchanged.append((filename, "already exists"))
+                        continue
+
+                    destination = self._choose_writable_managed_file_path(
+                        filename
+                    )
+                    if destination is None:
+                        failed.append(
+                            (filename, "no writable data directory")
+                        )
+                        continue
+
+                    try:
+                        self._write_text_atomically(
+                            destination,
+                            self._managed_file_template(filename),
+                            replace_existing=False,
+                        )
+                        created.append(destination)
+                    except Exception as exc:
+                        failed.append((filename, str(exc)))
+
+                lines = []
+                if created:
+                    lines.append("Created:")
+                    lines.extend(f"• {path}" for path in created)
+                if unchanged:
+                    if lines:
+                        lines.append("")
+                    lines.append("Not changed:")
+                    lines.extend(
+                        f"• {name}: {reason}"
+                        for name, reason in unchanged
+                    )
+                if failed:
+                    if lines:
+                        lines.append("")
+                    lines.append("Could not create:")
+                    lines.extend(
+                        f"• {name}: {reason}"
+                        for name, reason in failed
+                    )
+
+                wx.MessageBox(
+                    "\n".join(lines) if lines else "No files were created.",
+                    "Blocks to Storage",
+                    wx.OK | (
+                        wx.ICON_WARNING
+                        if failed
+                        else wx.ICON_INFORMATION
+                    ),
+                    self,
+                )
+                continue
+
+            confirmation = wx.MessageDialog(
+                self,
+                "Delete the selected plugin-managed files?\n\n"
+                + "\n".join(f"• {name}" for name in selected_names)
+                + "\n\nWorlds, reports, Minecraft files and the plugin itself "
+                "will not be deleted.",
+                "Delete selected plugin files?",
+                wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
+            )
+            try:
+                if confirmation.ShowModal() != wx.ID_YES:
+                    continue
+            finally:
+                confirmation.Destroy()
+
+            deleted = []
+            failed = []
+            for filename in selected_names:
+                for path in self._get_managed_file_candidates(filename):
+                    try:
+                        if path.is_file():
+                            path.unlink()
+                            deleted.append(path)
+                    except Exception as exc:
+                        failed.append((path, str(exc)))
+
+            fallback_directory = Path.home() / ".blocks_to_storage"
+            try:
+                if (
+                    fallback_directory.is_dir()
+                    and not any(fallback_directory.iterdir())
+                ):
+                    fallback_directory.rmdir()
+            except Exception:
+                pass
+
+            self._clear_loaded_display_name_data()
+            self._clear_loaded_conversion_data()
+
+            if self.SETTINGS_CONFIG_FILENAME in selected_names:
+                self._apply_settings_config_data(self._settings_defaults)
+                self._settings_config_load_error = ""
+                self._settings_config_write_error = ""
+
+            lines = []
+            if deleted:
+                lines.append("Deleted:")
+                lines.extend(f"• {path}" for path in deleted)
+            if failed:
+                if lines:
+                    lines.append("")
+                lines.append("Could not delete:")
+                lines.extend(
+                    f"• {path}: {reason}"
+                    for path, reason in failed
+                )
+
+            wx.MessageBox(
+                "\n".join(lines) if lines else "No selected files were found.",
+                "Blocks to Storage",
+                wx.OK | (
+                    wx.ICON_WARNING
+                    if failed
+                    else wx.ICON_INFORMATION
+                ),
+                self,
+            )
+
 
     def _get_existing_found_entries_path(self) -> Optional[Path]:
         """
@@ -5507,6 +8288,2028 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return None
 
+    # ---------------------------------------------------------------------
+    # Conversion rules and Amulet diagnostics
+    # ---------------------------------------------------------------------
+    def _normalize_conversion_identifier(self, value: str) -> Optional[str]:
+        """
+        Normalizes and validates a namespaced Minecraft identifier.
+        """
+        value = str(value).strip().lower()
+        if not value or "\0" in value:
+            return None
+        if value.count(":") != 1:
+            return None
+        namespace, base_name = value.split(":", 1)
+        if not namespace or not base_name:
+            return None
+        if not re.fullmatch(r"[a-z0-9_.-]+", namespace):
+            return None
+        if not re.fullmatch(r"[a-z0-9_./-]+", base_name):
+            return None
+        return f"{namespace}:{base_name}"
+
+    def _is_safe_conversion_source_key(self, source_key: str) -> bool:
+        """
+        Rejects broad placed-block names that need state-aware conversion.
+        """
+        source_key = self.ITEM_NAME_OVERRIDES.get(str(source_key), str(source_key))
+        if source_key in self.GENERIC_UNSAFE_ITEM_BLOCKS:
+            return False
+        if source_key in self.STATE_SENSITIVE_SCAN_BLOCKS:
+            return False
+        return True
+
+    def _is_safe_conversion_target_key(self, item_key: str) -> bool:
+        """
+        Rejects external conversion targets that cannot safely be stored as items.
+        """
+        item_key = self.ITEM_NAME_OVERRIDES.get(str(item_key), str(item_key))
+        if item_key in self.DEFAULT_EXCLUDED_BLOCKS:
+            return False
+        return self._is_safe_item_key(item_key)
+
+    def _get_existing_conversion_entries_path(self) -> Optional[Path]:
+        """
+        Returns an existing Conversion Entries.BTSP path without creating anything.
+        """
+        candidates = [
+            self._get_plugin_directory() / self.CONVERSION_ENTRIES_FILENAME,
+            Path.home() / ".blocks_to_storage" / self.CONVERSION_ENTRIES_FILENAME,
+        ]
+
+        for candidate in candidates:
+            try:
+                if candidate.is_file():
+                    return candidate
+            except Exception:
+                continue
+
+        return None
+
+
+    def _clear_loaded_conversion_data(self) -> None:
+        """
+        Clears all in-memory conversion-entry state.
+        """
+        self._reset_conversion_operation_state()
+
+
+    def _get_conversion_candidates_path(self) -> Optional[Path]:
+        """
+        Chooses a candidate-file path only after explicit user opt-in.
+        """
+        return self._choose_writable_managed_file_path(
+            self.CONVERSION_CANDIDATES_FILENAME
+        )
+
+    def _conversion_candidate_state_text(self, block) -> str:
+        """
+        Returns a bounded deterministic representation of source properties.
+        """
+        try:
+            properties = getattr(block, "properties", {}) or {}
+            parts = [
+                f"{key}={properties[key]}"
+                for key in sorted(properties)
+            ]
+            value = ";".join(parts)
+        except Exception:
+            value = ""
+        return self._safe_conversion_diagnostic_text(value, 240)
+
+    def _queue_conversion_candidate(
+        self,
+        block,
+        source_key: str,
+        target_key: str,
+        allow_resolved_family: bool = False,
+    ) -> None:
+        """
+        Queues one inactive observation without changing conversion results.
+
+        Normal candidate recording omits generic families already handled by
+        built-in state-aware resolvers. External language-assisted scan recovery
+        may explicitly bypass that omission because it identifies a new,
+        state-specific item that still needs review before built-in adoption.
+        """
+        if not self.record_conversion_candidates.GetValue():
+            return
+
+        source_key = self._normalize_conversion_identifier(source_key)
+        target_key = self._normalize_conversion_identifier(target_key)
+        if not source_key or not target_key or source_key == target_key:
+            return
+
+        # Candidate recording is intended to improve export conversion.
+        # Intentionally excluded, protected, or unsafe targets are omitted so
+        # the file does not suggest rules that normal exports must not use.
+        if (
+            target_key == "minecraft:bedrock"
+            or target_key in self.DEFAULT_EXCLUDED_BLOCKS
+            or target_key in self.KNOWN_UNSAFE_ITEM_BLOCKS
+        ):
+            return
+
+        record_all = False
+        try:
+            record_all = bool(
+                self.record_all_conversion_observations.GetValue()
+            )
+        except Exception:
+            pass
+
+        if (
+            not allow_resolved_family
+            and not record_all
+            and source_key in self.BUILT_IN_RESOLVED_CANDIDATE_SOURCES
+        ):
+            return
+
+        state_text = self._conversion_candidate_state_text(block)
+        self._pending_conversion_candidates[
+            (source_key, target_key, state_text)
+        ] += 1
+
+    def _write_pending_conversion_candidates(self) -> None:
+        """
+        Atomically merges inactive observations into the candidate file.
+
+        Per-operation counters are reset before every attempt. Existing records
+        are read only to merge observation totals; candidate data never becomes
+        active conversion authority.
+        """
+        self._conversion_candidates_written_count = 0
+        self._conversion_candidates_new_record_count = 0
+        self._conversion_candidates_updated_record_count = 0
+        self._conversion_candidate_observations_added_count = 0
+        self._conversion_candidates_existing_record_count = 0
+        self._conversion_candidates_total_record_count = 0
+        self._conversion_candidates_write_error = ""
+
+        if (
+            not self.record_conversion_candidates.GetValue()
+            or not self._pending_conversion_candidates
+        ):
+            return
+
+        destination = self._get_conversion_candidates_path()
+        if destination is None:
+            self._conversion_candidates_write_error = (
+                "No writable data directory was available."
+            )
+            return
+
+        existing = {}
+        if destination.is_file():
+            try:
+                if (
+                    destination.stat().st_size
+                    > self.MAX_CONVERSION_CANDIDATES_FILE_BYTES
+                ):
+                    self._conversion_candidates_write_error = (
+                        "Candidate file exceeds the configured size limit."
+                    )
+                    return
+
+                content = destination.read_text(
+                    encoding="utf-8-sig",
+                    errors="replace",
+                )
+                malformed_lines = []
+                for line_number, line in enumerate(
+                    content.splitlines(),
+                    start=1,
+                ):
+                    if not line or line.startswith("#"):
+                        continue
+
+                    parts = line.split("\t")
+                    if len(parts) != 4:
+                        malformed_lines.append(line_number)
+                        continue
+
+                    source_key, target_key, state_text, count_text = parts
+                    normalized_source = self._normalize_conversion_identifier(
+                        source_key
+                    )
+                    normalized_target = self._normalize_conversion_identifier(
+                        target_key
+                    )
+
+                    try:
+                        count = int(count_text)
+                    except Exception:
+                        malformed_lines.append(line_number)
+                        continue
+
+                    if (
+                        not normalized_source
+                        or not normalized_target
+                        or normalized_source == normalized_target
+                        or count < 0
+                    ):
+                        malformed_lines.append(line_number)
+                        continue
+
+                    existing[
+                        (
+                            normalized_source,
+                            normalized_target,
+                            state_text,
+                        )
+                    ] = count
+
+                if malformed_lines:
+                    line_preview = ", ".join(
+                        str(line_number)
+                        for line_number in malformed_lines[:10]
+                    )
+                    if len(malformed_lines) > 10:
+                        line_preview += ", ..."
+
+                    self._conversion_candidates_write_error = (
+                        "Candidate file contains malformed data on line(s) "
+                        f"{line_preview}. The existing file was preserved and "
+                        "no candidates were written."
+                    )
+                    return
+            except Exception as exc:
+                self._conversion_candidates_write_error = str(exc)
+                return
+
+        self._conversion_candidates_existing_record_count = len(existing)
+
+        for key, count in self._pending_conversion_candidates.items():
+            count = int(count)
+            if key in existing:
+                self._conversion_candidates_updated_record_count += 1
+            else:
+                self._conversion_candidates_new_record_count += 1
+            existing[key] = existing.get(key, 0) + count
+            self._conversion_candidate_observations_added_count += count
+
+        if len(existing) > self.MAX_CONVERSION_CANDIDATES:
+            self._conversion_candidates_write_error = (
+                "Candidate entry limit reached; no changes were written."
+            )
+            return
+
+        lines = [
+            "# Blocks to Storage inactive conversion candidates",
+            "# These observations never affect exports.",
+            "# Intentionally excluded and unsafe export targets are not recorded.",
+            "# Existing observations are read only so counts can be merged.",
+            "# Built-in resolved families are omitted unless advanced recording is enabled",
+            "# or an external language-assisted identity recovery is recorded.",
+            "# Format version: 1",
+            "# source<TAB>target<TAB>source properties<TAB>observations",
+            "",
+        ]
+        for (
+            source_key,
+            target_key,
+            state_text,
+        ), count in sorted(existing.items()):
+            lines.append(
+                f"{source_key}\t{target_key}\t{state_text}\t{count}"
+            )
+
+        temporary_path = None
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                newline="\n",
+                prefix=destination.name + ".",
+                suffix=".tmp",
+                dir=str(destination.parent),
+                delete=False,
+            ) as handle:
+                handle.write("\n".join(lines).rstrip() + "\n")
+                handle.flush()
+                try:
+                    os.fsync(handle.fileno())
+                except Exception:
+                    pass
+                temporary_path = Path(handle.name)
+
+            os.replace(str(temporary_path), str(destination))
+            self._conversion_candidates_written_count = len(
+                self._pending_conversion_candidates
+            )
+            self._conversion_candidates_total_record_count = len(existing)
+            self._conversion_candidates_write_error = ""
+        except Exception as exc:
+            self._conversion_candidates_write_error = str(exc)
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink()
+                except Exception:
+                    pass
+
+    def _record_conversion_entry_skip(
+        self,
+        reason: str,
+        line_number: int,
+        line_text: str,
+        source_key: Optional[str] = None,
+    ) -> None:
+        """
+        Records bounded, non-sensitive diagnostics for a rejected conversion rule.
+        """
+        self._conversion_entries_skip_reason_counts[reason] = (
+            self._conversion_entries_skip_reason_counts.get(reason, 0) + 1
+        )
+
+        if source_key is not None:
+            self._conversion_entries_skipped[source_key] = reason
+
+        clean_text = " ".join(str(line_text).strip().split())
+        if len(clean_text) > self.MAX_CONVERSION_DIAGNOSTIC_TEXT_LENGTH:
+            clean_text = (
+                clean_text[: self.MAX_CONVERSION_DIAGNOSTIC_TEXT_LENGTH - 3]
+                + "..."
+            )
+
+        detail = f"Line {line_number}: {reason}"
+        if clean_text:
+            detail += f" [{clean_text}]"
+
+        if len(self._conversion_entries_skip_details) < self.MAX_CONVERSION_DIAGNOSTIC_DETAILS:
+            self._conversion_entries_skip_details.append(detail)
+        else:
+            self._conversion_entries_skip_detail_overflow += 1
+
+    def _parse_conversion_entries_file(self, path: Path) -> Dict[str, str]:
+        """
+        Parses simple source-block to item conversion entries.
+
+        The initial format is intentionally conservative:
+        minecraft:source_block=minecraft:item_name
+
+        Comments, blank lines and unsupported future section headers are ignored.
+        Rejected rule lines are recorded with bounded diagnostics.
+        """
+        try:
+            file_size = path.stat().st_size
+        except Exception:
+            file_size = 0
+
+        if file_size > self.MAX_CONVERSION_ENTRIES_FILE_BYTES:
+            raise ValueError(
+                f"{self.CONVERSION_ENTRIES_FILENAME} is larger than the allowed 1 MiB limit."
+            )
+
+        entries: Dict[str, str] = {}
+        content = path.read_text(encoding="utf-8-sig", errors="replace")
+
+        for line_number, raw_line in enumerate(content.splitlines(), start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                continue
+            if "=" not in line:
+                self._record_conversion_entry_skip(
+                    "Missing '=' separator.",
+                    line_number,
+                    line,
+                )
+                continue
+
+            source_text, item_text = line.split("=", 1)
+            source_key = self._normalize_conversion_identifier(source_text)
+            item_key = self._normalize_conversion_identifier(item_text)
+
+            if source_key is None:
+                self._record_conversion_entry_skip(
+                    "Invalid source identifier.",
+                    line_number,
+                    line,
+                )
+                continue
+            if item_key is None:
+                self._record_conversion_entry_skip(
+                    "Invalid target identifier.",
+                    line_number,
+                    line,
+                    source_key,
+                )
+                continue
+            if not self._is_safe_conversion_source_key(source_key):
+                self._record_conversion_entry_skip(
+                    "State-sensitive or generic source requires built-in logic.",
+                    line_number,
+                    line,
+                    source_key,
+                )
+                continue
+            if not self._is_safe_conversion_target_key(item_key):
+                self._record_conversion_entry_skip(
+                    "Unsafe or excluded target item.",
+                    line_number,
+                    line,
+                    source_key,
+                )
+                continue
+
+            existing_item = entries.get(source_key)
+            if existing_item is not None:
+                if existing_item != item_key:
+                    self._record_conversion_entry_skip(
+                        "Conflicting duplicate source rule.",
+                        line_number,
+                        line,
+                        source_key,
+                    )
+                continue
+
+            entries[source_key] = item_key
+            if len(entries) >= self.MAX_CONVERSION_ENTRIES:
+                raise ValueError(
+                    f"{self.CONVERSION_ENTRIES_FILENAME} has more than {self.MAX_CONVERSION_ENTRIES:,} usable entries."
+                )
+
+        return entries
+
+    def _ensure_conversion_entries_loaded(self) -> bool:
+        """
+        Loads enabled conversion entries once for the current operation.
+        """
+        if self._conversion_entries_prepared:
+            return bool(self._conversion_entries)
+
+        self._conversion_entries_prepared = True
+        self._conversion_entries = {}
+        self._conversion_entries_used = {}
+        self._conversion_entries_skipped = {}
+        self._conversion_entries_skip_reason_counts = {}
+        self._conversion_entries_skip_details = []
+        self._conversion_entries_skip_detail_overflow = 0
+        self._conversion_entries_load_error = ""
+        self._conversion_entries_loaded_count = 0
+
+        if not self.use_conversion_entries.GetValue():
+            return False
+
+        conversion_path = self._get_existing_conversion_entries_path()
+        if conversion_path is None:
+            return False
+
+        try:
+            self._conversion_entries = self._parse_conversion_entries_file(conversion_path)
+            self._conversion_entries_loaded_count = len(self._conversion_entries)
+        except Exception as exc:
+            self._conversion_entries = {}
+            self._conversion_entries_load_error = str(exc)
+            self._conversion_entries_loaded_count = 0
+
+        return bool(self._conversion_entries)
+
+    def _resolve_conversion_entry_item(
+        self,
+        source_key: Optional[str],
+        current_key: Optional[str],
+    ) -> Optional[str]:
+        """
+        Returns a reviewed external conversion item when it is safe to use.
+        """
+        if source_key is None or current_key is None:
+            return None
+        if not self.use_conversion_entries.GetValue():
+            return None
+
+        source_key = self._normalize_conversion_identifier(source_key)
+        current_key = self._normalize_conversion_identifier(current_key)
+        if source_key is None or current_key is None:
+            return None
+
+        # Built-in conversions and verified overrides keep priority. External
+        # entries only fill unresolved same-name cases, never replace a result
+        # that the plugin already converted to a different item.
+        if source_key != current_key:
+            return None
+
+        if not self._is_safe_conversion_source_key(source_key):
+            return None
+
+        self._ensure_conversion_entries_loaded()
+        item_key = self._conversion_entries.get(source_key)
+        if item_key is None:
+            return None
+        if not self._is_safe_conversion_target_key(item_key):
+            self._record_conversion_entry_skip(
+                "Unsafe or excluded target item during resolution.",
+                0,
+                f"{source_key}={item_key}",
+                source_key,
+            )
+            return None
+
+        self._conversion_entries_used[source_key] = item_key
+        return item_key
+
+    def _safe_conversion_diagnostic_text(self, value, max_length: Optional[int] = None) -> str:
+        """
+        Converts diagnostic values to short report-safe text without local paths.
+        """
+        if max_length is None:
+            max_length = self.MAX_CONVERSION_DIAGNOSTIC_TEXT_LENGTH
+
+        text_value = str(value)
+        text_value = text_value.replace("\r", " ").replace("\n", " ")
+        text_value = re.sub(r"[A-Za-z]:\\[^\s,\]\)]+", "[local-path]", text_value)
+        text_value = re.sub(r"/(?:Users|home|mnt|var|tmp)/[^\s,\]\)]+", "[local-path]", text_value)
+        text_value = " ".join(text_value.split())
+
+        if len(text_value) > max_length:
+            text_value = text_value[: max_length - 3] + "..."
+        return text_value
+
+    def _diagnostic_type_name(self, obj) -> str:
+        """
+        Returns a compact module and class name for report diagnostics.
+        """
+        if obj is None:
+            return "None"
+        obj_type = type(obj)
+        module_name = getattr(obj_type, "__module__", "")
+        class_name = getattr(obj_type, "__name__", obj_type.__class__.__name__)
+        if module_name and module_name not in ("builtins", "__builtin__"):
+            return self._safe_conversion_diagnostic_text(f"{module_name}.{class_name}")
+        return self._safe_conversion_diagnostic_text(class_name)
+
+    def _diagnostic_signature_text(self, obj) -> str:
+        """
+        Returns a short callable signature when Python can inspect it safely.
+        """
+        try:
+            signature = inspect.signature(obj)
+        except Exception:
+            return "signature unavailable"
+        return self._safe_conversion_diagnostic_text(signature, 120)
+
+    def _diagnostic_get_attribute(self, obj, attribute_name: str):
+        """
+        Safely reads an attribute for capability diagnostics.
+        """
+        try:
+            return True, getattr(obj, attribute_name), ""
+        except Exception as exc:
+            return False, None, type(exc).__name__
+
+    def _diagnostic_attribute_status(self, obj, attribute_name: str) -> str:
+        """
+        Describes whether an attribute exists and whether it is callable.
+        """
+        ok, value, error_name = self._diagnostic_get_attribute(obj, attribute_name)
+        if not ok:
+            return f"{attribute_name}: unavailable ({error_name})"
+        if value is None:
+            return f"{attribute_name}: None"
+        if callable(value):
+            return (
+                f"{attribute_name}: callable "
+                f"{self._diagnostic_signature_text(value)}"
+            )
+        return f"{attribute_name}: {self._diagnostic_type_name(value)}"
+
+    def _diagnostic_log_attributes(
+        self,
+        label: str,
+        obj,
+        attribute_names: Sequence[str],
+    ) -> None:
+        """
+        Logs a bounded list of safe attribute capability checks.
+        """
+        self._log(f"  {label} type: {self._diagnostic_type_name(obj)}")
+        if obj is None:
+            return
+
+        for attribute_name in attribute_names:
+            self._log(f"    {self._diagnostic_attribute_status(obj, attribute_name)}")
+
+    def _diagnostic_collect_translation_managers(self) -> List[Tuple[str, object]]:
+        """
+        Finds likely translation-manager objects exposed by the loaded Amulet build.
+        """
+        candidates: List[Tuple[str, object]] = []
+        seen_ids: Set[int] = set()
+
+        roots = [
+            ("world", getattr(self, "world", None)),
+            ("level_wrapper", getattr(getattr(self, "world", None), "level_wrapper", None)),
+            ("canvas", getattr(self, "canvas", None)),
+        ]
+
+        manager_attribute_names = (
+            "translation_manager",
+            "_translation_manager",
+            "translator",
+            "_translator",
+        )
+
+        for root_label, root_obj in roots:
+            if root_obj is None:
+                continue
+            for attribute_name in manager_attribute_names:
+                ok, value, _error_name = self._diagnostic_get_attribute(root_obj, attribute_name)
+                if not ok or value is None:
+                    continue
+                object_id = id(value)
+                if object_id in seen_ids:
+                    continue
+                seen_ids.add(object_id)
+                candidates.append((f"{root_label}.{attribute_name}", value))
+
+        return candidates
+
+    def _diagnostic_lookup_version_object(self, manager_label: str, manager_obj):
+        """
+        Attempts one safe version lookup for a translation manager.
+        """
+        lookup_attempts = (
+            ("get_version", (self._world_platform, self._world_version)),
+            ("get_version_container", (self._world_platform, self._world_version)),
+            ("get_version", ((self._world_platform, self._world_version),)),
+            ("get_version_container", ((self._world_platform, self._world_version),)),
+        )
+
+        for method_name, args in lookup_attempts:
+            ok, method_obj, _error_name = self._diagnostic_get_attribute(
+                manager_obj,
+                method_name,
+            )
+            if not ok or not callable(method_obj):
+                continue
+            try:
+                return (
+                    True,
+                    method_obj(*args),
+                    f"{manager_label}.{method_name}",
+                    "",
+                )
+            except Exception as exc:
+                last_error = type(exc).__name__
+
+        return False, None, manager_label, locals().get("last_error", "not available")
+
+    def _log_amulet_conversion_capability_diagnostic(self) -> None:
+        """
+        Adds privacy-safe Amulet conversion capability information to the report.
+        """
+        self._log("Amulet conversion capability diagnostic:")
+        self._log("  Purpose: reports local API capabilities only; no paths or world block data are included.")
+        self._log(f"  World platform: {self._safe_conversion_diagnostic_text(self._world_platform)}")
+        self._log(f"  World version: {self._safe_conversion_diagnostic_text(self._world_version)}")
+        self._log(f"  Canvas dimension: {self._safe_conversion_diagnostic_text(getattr(self.canvas, 'dimension', '(unknown)'))}")
+
+        world_obj = getattr(self, "world", None)
+        wrapper_obj = getattr(world_obj, "level_wrapper", None)
+
+        self._diagnostic_log_attributes(
+            "world",
+            world_obj,
+            (
+                "get_version_block",
+                "get_block",
+                "get_chunk",
+                "translation_manager",
+                "level_wrapper",
+            ),
+        )
+        self._diagnostic_log_attributes(
+            "level_wrapper",
+            wrapper_obj,
+            (
+                "platform",
+                "version",
+                "translation_manager",
+                "get_version_block",
+                "get_raw_chunk",
+                "get_chunk",
+            ),
+        )
+
+        translation_managers = self._diagnostic_collect_translation_managers()
+        if not translation_managers:
+            self._log("  Translation manager candidates: none found")
+            return
+
+        self._log(f"  Translation manager candidates: {len(translation_managers):,}")
+        version_obj = None
+        version_source = ""
+
+        for manager_label, manager_obj in translation_managers:
+            self._diagnostic_log_attributes(
+                manager_label,
+                manager_obj,
+                (
+                    "get_version",
+                    "get_version_container",
+                    "get_platforms",
+                    "get_version_numbers",
+                    "platforms",
+                    "versions",
+                ),
+            )
+            if version_obj is None:
+                ok, candidate_version, source_label, error_name = (
+                    self._diagnostic_lookup_version_object(manager_label, manager_obj)
+                )
+                if ok and candidate_version is not None:
+                    version_obj = candidate_version
+                    version_source = source_label
+                elif error_name:
+                    self._log(
+                        f"    Version lookup through {source_label}: failed ({error_name})"
+                    )
+
+        if version_obj is None:
+            self._log("  Version object lookup: unavailable")
+            return
+
+        self._log(f"  Version object lookup: success through {version_source}")
+        self._diagnostic_log_attributes(
+            "version object",
+            version_obj,
+            (
+                "platform",
+                "version_number",
+                "data_version",
+                "block",
+                "item",
+                "entity",
+                "biome",
+                "get_item",
+                "get_block",
+            ),
+        )
+
+        for translator_label in ("block", "item", "entity"):
+            ok, translator_obj, error_name = self._diagnostic_get_attribute(
+                version_obj,
+                translator_label,
+            )
+            if not ok or translator_obj is None:
+                self._log(
+                    f"  version.{translator_label}: unavailable "
+                    f"({error_name or 'missing'})"
+                )
+                continue
+
+            self._diagnostic_log_attributes(
+                f"version.{translator_label}",
+                translator_obj,
+                (
+                    "get_specification",
+                    "to_universal",
+                    "from_universal",
+                    "get_mapping",
+                    "has_mapping",
+                    "specification",
+                ),
+            )
+
+
+    def _diagnostic_get_version_object(self):
+        """
+        Returns the first usable version object exposed by Amulet.
+        """
+        for manager_label, manager_obj in self._diagnostic_collect_translation_managers():
+            ok, version_obj, source_label, error_name = (
+                self._diagnostic_lookup_version_object(manager_label, manager_obj)
+            )
+            if ok and version_obj is not None:
+                return version_obj, source_label, ""
+            if error_name:
+                last_error = error_name
+        return None, "", locals().get("last_error", "not available")
+
+    def _diagnostic_result_identity(self, value) -> str:
+        """
+        Returns a short identity string for translated block or item objects.
+        """
+        if value is None:
+            return "None"
+        namespace = getattr(value, "namespace", None)
+        base_name = getattr(value, "base_name", None)
+        if namespace and base_name:
+            return self._safe_conversion_diagnostic_text(
+                f"{namespace}:{base_name}",
+                120,
+            )
+        return self._diagnostic_type_name(value)
+
+    def _diagnostic_call_summary(self, callable_obj, *args) -> Tuple[bool, str]:
+        """
+        Runs one bounded diagnostic call and returns success or exception type.
+        """
+        try:
+            result = callable_obj(*args)
+        except Exception as exc:
+            return False, type(exc).__name__
+        return True, self._diagnostic_result_identity(result)
+
+    def _reset_amulet_translator_capability_state(self) -> None:
+        """
+        Clears cached Amulet translator capability results for a new operation.
+        """
+        self._amulet_translator_capabilities = {}
+        self._amulet_translator_version_object = None
+        self._amulet_translator_version_source = ""
+        self._amulet_translator_capabilities_prepared = False
+        self._amulet_conversion_audit_entries = {}
+        self._amulet_conversion_audit_buckets = collections.defaultdict(set)
+        self._amulet_conversion_audit_omitted_identities = set()
+        self._amulet_conversion_audit_omitted_overflow = 0
+        self._reviewed_amulet_normalizations_used = collections.Counter()
+        self._reviewed_amulet_normalization_failures = collections.Counter()
+        self._reviewed_amulet_normalization_cache = {}
+
+    def _release_amulet_translator_capability_state(self) -> None:
+        """
+        Releases per-operation Amulet translator references and probe results.
+        """
+        self._amulet_translator_capabilities.clear()
+        self._amulet_translator_version_object = None
+        self._amulet_translator_version_source = ""
+        self._amulet_translator_capabilities_prepared = False
+        self._amulet_conversion_audit_entries.clear()
+        self._amulet_conversion_audit_buckets.clear()
+        self._amulet_conversion_audit_omitted_identities.clear()
+        self._amulet_conversion_audit_omitted_overflow = 0
+        self._reviewed_amulet_normalizations_used.clear()
+        self._reviewed_amulet_normalization_failures.clear()
+        self._reviewed_amulet_normalization_cache.clear()
+
+    def _prepare_amulet_translator_capabilities(self) -> None:
+        """
+        Probes translator support once and caches the result for this operation.
+        """
+        if self._amulet_translator_capabilities_prepared:
+            return
+
+        self._amulet_translator_capabilities_prepared = True
+        version_obj, version_source, error_name = self._diagnostic_get_version_object()
+        if version_obj is None:
+            self._amulet_translator_capabilities["version"] = (
+                False,
+                error_name or "not available",
+            )
+            return
+
+        self._amulet_translator_version_object = version_obj
+        self._amulet_translator_version_source = version_source
+        self._amulet_translator_capabilities["version"] = (True, version_source)
+
+        block_translator = getattr(version_obj, "block", None)
+        item_translator = getattr(version_obj, "item", None)
+
+        block_get_specification = getattr(block_translator, "get_specification", None)
+        block_to_universal = getattr(block_translator, "to_universal", None)
+        block_from_universal = getattr(block_translator, "from_universal", None)
+
+        self._amulet_translator_capabilities["block.get_specification"] = (
+            callable(block_get_specification),
+            "callable" if callable(block_get_specification) else "unavailable",
+        )
+        self._amulet_translator_capabilities["block.to_universal"] = (
+            callable(block_to_universal),
+            "callable" if callable(block_to_universal) else "unavailable",
+        )
+        self._amulet_translator_capabilities["block.from_universal"] = (
+            callable(block_from_universal),
+            "callable" if callable(block_from_universal) else "unavailable",
+        )
+
+        item_get_specification = getattr(item_translator, "get_specification", None)
+        item_to_universal = getattr(item_translator, "to_universal", None)
+        item_from_universal = getattr(item_translator, "from_universal", None)
+
+        if not callable(item_get_specification) or not callable(item_to_universal):
+            self._amulet_translator_capabilities["item"] = (
+                False,
+                "required methods unavailable",
+            )
+            return
+
+        try:
+            item_get_specification("minecraft", "stone")
+            if Item is None:
+                self._amulet_translator_capabilities["item"] = (
+                    False,
+                    "item object construction unavailable",
+                )
+                return
+            universal_item = item_to_universal(Item("minecraft", "stone"))
+            if callable(item_from_universal) and universal_item is not None:
+                item_from_universal(universal_item)
+        except Exception as exc:
+            self._amulet_translator_capabilities["item"] = (
+                False,
+                type(exc).__name__,
+            )
+            return
+
+        self._amulet_translator_capabilities["item"] = (True, "usable")
+
+    def _reviewed_normalization_cache_key(
+        self,
+        block,
+        source_key: str,
+    ) -> Tuple[str, Tuple[Tuple[str, str], ...]]:
+        """
+        Builds a bounded, hashable key from the block identity and properties.
+        """
+        properties = getattr(block, "properties", None)
+        normalized_properties: List[Tuple[str, str]] = []
+
+        if properties:
+            try:
+                for property_name, property_value in properties.items():
+                    normalized_properties.append(
+                        (str(property_name), str(property_value))
+                    )
+            except Exception:
+                normalized_properties = []
+
+        normalized_properties.sort()
+        return source_key, tuple(normalized_properties)
+
+    def _resolve_reviewed_amulet_normalization(
+        self,
+        block,
+        source_key: str,
+        current_item_key: str,
+    ) -> Optional[str]:
+        """
+        Applies only reviewed Amulet normalizations to unresolved generic blocks.
+        """
+        if not self.use_reviewed_amulet_normalization.GetValue():
+            return None
+
+        expected_item = self.REVIEWED_AMULET_NORMALIZATIONS.get(source_key)
+        if not expected_item or current_item_key != source_key:
+            return None
+
+        # Reviewed Amulet assistance is only allowed to fill an unresolved
+        # generic identity. It may never replace a result already chosen by
+        # built-in state-aware logic, a verified override or a safe identity.
+        if source_key not in self.GENERIC_UNSAFE_ITEM_BLOCKS:
+            self._reviewed_amulet_normalization_failures[
+                "reviewed source is not an unresolved generic identity"
+            ] += 1
+            return None
+
+        if expected_item == source_key:
+            self._reviewed_amulet_normalization_failures[
+                "reviewed target does not resolve the generic identity"
+            ] += 1
+            return None
+
+        if not self._is_safe_conversion_target_key(expected_item):
+            self._reviewed_amulet_normalization_failures[
+                "reviewed target failed safety validation"
+            ] += 1
+            return None
+
+        cache_key = self._reviewed_normalization_cache_key(block, source_key)
+        if cache_key in self._reviewed_amulet_normalization_cache:
+            cached_result = self._reviewed_amulet_normalization_cache[cache_key]
+            if cached_result:
+                self._reviewed_amulet_normalizations_used[
+                    (source_key, cached_result)
+                ] += 1
+            return cached_result
+
+        self._prepare_amulet_translator_capabilities()
+        version_ok, _version_detail = self._amulet_translator_capabilities.get(
+            "version",
+            (False, "not available"),
+        )
+        block_supported, block_detail = self._amulet_translator_capabilities.get(
+            "block.to_universal",
+            (False, "not checked"),
+        )
+
+        if (
+            not version_ok
+            or not block_supported
+            or self._amulet_translator_version_object is None
+        ):
+            reason = block_detail if not block_supported else "version unavailable"
+            self._reviewed_amulet_normalization_failures[reason] += 1
+            self._reviewed_amulet_normalization_cache[cache_key] = None
+            return None
+
+        translator = getattr(
+            self._amulet_translator_version_object,
+            "block",
+            None,
+        )
+        to_universal = getattr(translator, "to_universal", None)
+        from_universal = getattr(translator, "from_universal", None)
+
+        if not callable(to_universal) or not callable(from_universal):
+            self._reviewed_amulet_normalization_failures[
+                "required block translator methods unavailable"
+            ] += 1
+            self._reviewed_amulet_normalization_cache[cache_key] = None
+            return None
+
+        try:
+            translated = to_universal(block)
+            universal_block = (
+                translated[0]
+                if isinstance(translated, tuple) and translated
+                else translated
+            )
+            translated_back = from_universal(universal_block)
+            round_trip_block = (
+                translated_back[0]
+                if isinstance(translated_back, tuple) and translated_back
+                else translated_back
+            )
+            round_trip_identity = self._diagnostic_result_identity(
+                round_trip_block
+            )
+        except Exception as exc:
+            self._reviewed_amulet_normalization_failures[
+                type(exc).__name__
+            ] += 1
+            self._reviewed_amulet_normalization_cache[cache_key] = None
+            return None
+
+        if round_trip_identity != expected_item:
+            self._reviewed_amulet_normalization_failures[
+                f"unexpected candidate {round_trip_identity}"
+            ] += 1
+            self._reviewed_amulet_normalization_cache[cache_key] = None
+            return None
+
+        self._reviewed_amulet_normalization_cache[cache_key] = expected_item
+        self._reviewed_amulet_normalizations_used[
+            (source_key, expected_item)
+        ] += 1
+        return expected_item
+
+
+    def _classify_conversion_audit_source(
+        self,
+        source_key: str,
+        item_key: Optional[str],
+        conversion_entry_item: Optional[str],
+        reviewed_normalization_item: Optional[str] = None,
+    ) -> str:
+        """
+        Describes which resolver layer produced the reported item identity.
+        """
+        item_text = str(item_key) if item_key is not None else "(not exported)"
+
+        if reviewed_normalization_item:
+            return "reviewed Amulet normalization"
+
+        if conversion_entry_item:
+            return "Conversion Entries.BTSP"
+
+        if source_key in self.ITEM_NAME_OVERRIDES:
+            return "built-in override"
+
+        if source_key in self.DEFAULT_EXCLUDED_BLOCKS:
+            return "excluded block"
+
+        if source_key in self.KNOWN_UNSAFE_ITEM_BLOCKS:
+            return "unsafe technical block"
+
+        if source_key in self.GENERIC_UNSAFE_ITEM_BLOCKS and source_key == item_text:
+            return "unresolved generic identity"
+
+        if source_key == item_text:
+            return "safe identity"
+
+        return "built-in family or state conversion"
+
+    def _track_omitted_amulet_conversion_audit_key(
+        self,
+        audit_key: Tuple[str, str],
+    ) -> None:
+        """
+        Tracks one omitted unique audit identity without unbounded growth.
+        """
+        if audit_key in self._amulet_conversion_audit_omitted_identities:
+            return
+
+        if (
+            len(self._amulet_conversion_audit_omitted_identities)
+            < self.MAX_AMULET_CONVERSION_AUDIT_OMITTED_IDENTITIES
+        ):
+            self._amulet_conversion_audit_omitted_identities.add(audit_key)
+        else:
+            self._amulet_conversion_audit_omitted_overflow += 1
+
+    def _amulet_conversion_audit_worst_entry_key(
+        self,
+    ) -> Optional[Tuple[str, str]]:
+        """
+        Returns one retained entry from the lowest-value priority bucket.
+        """
+        for priority in range(7, -1, -1):
+            bucket = self._amulet_conversion_audit_buckets.get(priority)
+            if bucket:
+                return next(iter(bucket))
+        return None
+
+    def _store_amulet_conversion_audit_entry(
+        self,
+        audit_key: Tuple[str, str],
+        audit_entry: Tuple[str, str, str, str, str, str],
+    ) -> None:
+        """
+        Stores an audit entry and updates its priority bucket.
+        """
+        self._amulet_conversion_audit_entries[audit_key] = audit_entry
+        priority = self._amulet_conversion_audit_priority(
+            audit_entry[1],
+            audit_entry[4],
+            audit_entry[5],
+        )
+        self._amulet_conversion_audit_buckets[priority].add(audit_key)
+
+    def _remove_amulet_conversion_audit_entry(
+        self,
+        audit_key: Tuple[str, str],
+    ) -> None:
+        """
+        Removes an audit entry and updates its priority bucket.
+        """
+        old_entry = self._amulet_conversion_audit_entries.pop(audit_key, None)
+        if old_entry is None:
+            return
+
+        old_priority = self._amulet_conversion_audit_priority(
+            old_entry[1],
+            old_entry[4],
+            old_entry[5],
+        )
+        bucket = self._amulet_conversion_audit_buckets.get(old_priority)
+        if bucket is not None:
+            bucket.discard(audit_key)
+            if not bucket:
+                self._amulet_conversion_audit_buckets.pop(old_priority, None)
+
+
+    def _record_amulet_conversion_comparison(
+        self,
+        block,
+        source_key: str,
+        item_key: Optional[str],
+        conversion_entry_item: Optional[str] = None,
+        reviewed_normalization_item: Optional[str] = None,
+    ) -> None:
+        """
+        Retains the most useful bounded report-only conversion comparisons.
+        """
+        audit_enabled = self.include_amulet_conversion_audit.GetValue()
+        candidate_recording = self.record_conversion_candidates.GetValue()
+        if not audit_enabled and not candidate_recording:
+            return
+
+        source_key = str(source_key or "")
+
+        if source_key == "minecraft:sapling" and item_key == source_key:
+            audit_sapling_item = self._get_sapling_item_name(block)
+            if audit_sapling_item:
+                item_key = audit_sapling_item
+
+        item_text = str(item_key) if item_key is not None else "(not exported)"
+        audit_key = (source_key, item_text)
+
+        if audit_key in self._amulet_conversion_audit_entries:
+            return
+
+        resolver_source = self._classify_conversion_audit_source(
+            source_key,
+            item_key,
+            conversion_entry_item,
+            reviewed_normalization_item,
+        )
+        preliminary_priority = self._amulet_conversion_audit_priority(
+            resolver_source,
+            "(none)",
+            "",
+        )
+
+        replacement_key = None
+        if (
+            len(self._amulet_conversion_audit_entries)
+            >= self.MAX_AMULET_CONVERSION_AUDIT_ENTRIES
+        ):
+            worst_key = self._amulet_conversion_audit_worst_entry_key()
+            if worst_key is None:
+                self._track_omitted_amulet_conversion_audit_key(audit_key)
+                return
+
+            worst_entry = self._amulet_conversion_audit_entries[worst_key]
+            worst_priority = self._amulet_conversion_audit_priority(
+                worst_entry[1],
+                worst_entry[4],
+                worst_entry[5],
+            )
+            if preliminary_priority >= worst_priority:
+                self._track_omitted_amulet_conversion_audit_key(audit_key)
+                return
+            replacement_key = worst_key
+
+        self._prepare_amulet_translator_capabilities()
+        version_ok, _version_detail = self._amulet_translator_capabilities.get(
+            "version",
+            (False, "not available"),
+        )
+        block_supported, block_detail = self._amulet_translator_capabilities.get(
+            "block.to_universal",
+            (False, "not checked"),
+        )
+
+        universal_identity = "(unavailable)"
+        round_trip_identity = "(not run)"
+        normalization_candidate = "(none)"
+
+        if (
+            version_ok
+            and block_supported
+            and self._amulet_translator_version_object is not None
+        ):
+            translator = getattr(
+                self._amulet_translator_version_object,
+                "block",
+                None,
+            )
+            to_universal = getattr(translator, "to_universal", None)
+            from_universal = getattr(translator, "from_universal", None)
+
+            try:
+                translated = to_universal(block)
+                universal_block = (
+                    translated[0]
+                    if isinstance(translated, tuple) and translated
+                    else translated
+                )
+                universal_identity = self._diagnostic_result_identity(
+                    universal_block
+                )
+
+                if callable(from_universal) and universal_block is not None:
+                    translated_back = from_universal(universal_block)
+                    round_trip_block = (
+                        translated_back[0]
+                        if isinstance(translated_back, tuple) and translated_back
+                        else translated_back
+                    )
+                    round_trip_identity = self._diagnostic_result_identity(
+                        round_trip_block
+                    )
+                    if (
+                        source_key in self.GENERIC_UNSAFE_ITEM_BLOCKS
+                        and round_trip_identity not in {
+                            source_key,
+                            "(unavailable)",
+                            "(not run)",
+                        }
+                    ):
+                        normalization_candidate = round_trip_identity
+            except Exception as exc:
+                universal_identity = f"(failed: {type(exc).__name__})"
+                round_trip_identity = "(not run)"
+        elif not block_supported:
+            universal_identity = f"(unusable: {block_detail})"
+
+        if (
+            candidate_recording
+            and normalization_candidate not in {"(none)", source_key}
+            and normalization_candidate.startswith("minecraft:")
+        ):
+            self._queue_conversion_candidate(
+                block,
+                source_key,
+                normalization_candidate,
+            )
+
+        if not audit_enabled:
+            return
+
+        generic_family_suffixes = {
+            "minecraft:sapling": "_sapling",
+            "minecraft:button": "_button",
+            "minecraft:pressure_plate": "_pressure_plate",
+            "minecraft:trapdoor": "_trapdoor",
+        }
+        expected_suffix = generic_family_suffixes.get(source_key)
+
+        if (
+            expected_suffix
+            and item_text == source_key
+            and round_trip_identity.startswith("minecraft:")
+            and round_trip_identity.endswith(expected_suffix)
+            and round_trip_identity != source_key
+        ):
+            item_text = round_trip_identity
+            item_key = round_trip_identity
+            audit_key = (source_key, item_text)
+            resolver_source = "built-in family or state conversion"
+            normalization_candidate = "(none)"
+
+            if audit_key in self._amulet_conversion_audit_entries:
+                return
+
+        audit_outcome = self._amulet_conversion_audit_outcome(
+            source_key,
+            item_text,
+            resolver_source,
+            round_trip_identity,
+            normalization_candidate,
+        )
+        audit_entry = (
+            item_text,
+            resolver_source,
+            universal_identity,
+            round_trip_identity,
+            normalization_candidate,
+            audit_outcome,
+        )
+        final_priority = self._amulet_conversion_audit_priority(
+            resolver_source,
+            normalization_candidate,
+            audit_outcome,
+        )
+
+        if (
+            replacement_key is None
+            and len(self._amulet_conversion_audit_entries)
+            >= self.MAX_AMULET_CONVERSION_AUDIT_ENTRIES
+        ):
+            worst_key = self._amulet_conversion_audit_worst_entry_key()
+            if worst_key is None:
+                self._track_omitted_amulet_conversion_audit_key(audit_key)
+                return
+
+            worst_entry = self._amulet_conversion_audit_entries[worst_key]
+            worst_priority = self._amulet_conversion_audit_priority(
+                worst_entry[1],
+                worst_entry[4],
+                worst_entry[5],
+            )
+            if final_priority >= worst_priority:
+                self._track_omitted_amulet_conversion_audit_key(audit_key)
+                return
+            replacement_key = worst_key
+
+        if replacement_key is not None:
+            self._remove_amulet_conversion_audit_entry(replacement_key)
+            self._track_omitted_amulet_conversion_audit_key(replacement_key)
+
+        self._store_amulet_conversion_audit_entry(audit_key, audit_entry)
+
+
+    def _log_reviewed_amulet_normalization_summary(self) -> None:
+        """
+        Reports reviewed normalization usage and safe fallback failures.
+        """
+        enabled = self.use_reviewed_amulet_normalization.GetValue()
+        self._log("Conversion authority: plugin-controlled")
+        self._log(
+            "Conversion priority: built-in state / integrated identity / override "
+            "-> unresolved external entry -> plugin-reviewed Amulet fallback -> safe skip"
+        )
+        self._log(f"Plugin-reviewed conversion fallback enabled: {enabled}")
+        self._log(
+            f"Reviewed Amulet normalizations used: "
+            f"{sum(self._reviewed_amulet_normalizations_used.values()):,}"
+        )
+
+        for (source_key, item_key), count in sorted(
+            self._reviewed_amulet_normalizations_used.items()
+        ):
+            self._log(
+                f"  {source_key} -> {item_key}: {count:,}"
+            )
+
+        failure_count = sum(
+            self._reviewed_amulet_normalization_failures.values()
+        )
+        self._log(
+            f"Reviewed Amulet normalization fallbacks: {failure_count:,}"
+        )
+        for reason, count in sorted(
+            self._reviewed_amulet_normalization_failures.items()
+        ):
+            self._log(f"  {reason}: {count:,}")
+
+    def _conversion_audit_sign_item_key(
+        self,
+        block_key: str,
+    ) -> Optional[str]:
+        """
+        Converts known placed sign identifiers into their inventory item key.
+        """
+        if not block_key or ":" not in block_key:
+            return None
+
+        namespace, base_name = block_key.split(":", 1)
+        if namespace != "minecraft":
+            return None
+
+        normalized_name = base_name.replace("darkoak", "dark_oak")
+
+        if normalized_name in {"sign", "standing_sign", "wall_sign"}:
+            return "minecraft:oak_sign"
+
+        suffixes = (
+            "_standing_sign",
+            "_wall_sign",
+        )
+        for suffix in suffixes:
+            if normalized_name.endswith(suffix):
+                wood_type = normalized_name[:-len(suffix)]
+                if wood_type == "oak":
+                    return "minecraft:oak_sign"
+                candidate = self.SIGN_ITEM_BY_TYPE.get(wood_type)
+                if candidate:
+                    return candidate
+
+        return None
+
+    def _conversion_audit_coral_fan_item_key(
+        self,
+        block_key: str,
+    ) -> Optional[str]:
+        """
+        Converts placed coral wall-fan identifiers to inventory fan items.
+        """
+        if not block_key or ":" not in block_key:
+            return None
+
+        namespace, base_name = block_key.split(":", 1)
+        if namespace != "minecraft":
+            return None
+
+        normalized_name = base_name.strip().lower()
+
+        if normalized_name.endswith("_coral_wall_fan"):
+            normalized_name = normalized_name.replace(
+                "_coral_wall_fan",
+                "_coral_fan",
+            )
+            return f"minecraft:{normalized_name}"
+
+        return None
+
+    def _conversion_audit_alias_equivalent(
+        self,
+        first_key: str,
+        second_key: str,
+    ) -> bool:
+        """
+        Checks known block / item aliases in either direction.
+        """
+        if first_key == second_key:
+            return True
+
+        first_coral_fan_item = self._conversion_audit_coral_fan_item_key(
+            first_key
+        )
+        second_coral_fan_item = self._conversion_audit_coral_fan_item_key(
+            second_key
+        )
+        if first_coral_fan_item and first_coral_fan_item == second_key:
+            return True
+        if second_coral_fan_item and second_coral_fan_item == first_key:
+            return True
+        if (
+            first_coral_fan_item
+            and second_coral_fan_item
+            and first_coral_fan_item == second_coral_fan_item
+        ):
+            return True
+
+        first_sign_item = self._conversion_audit_sign_item_key(first_key)
+        second_sign_item = self._conversion_audit_sign_item_key(second_key)
+        if first_sign_item and first_sign_item == second_key:
+            return True
+        if second_sign_item and second_sign_item == first_key:
+            return True
+        if (
+            first_sign_item
+            and second_sign_item
+            and first_sign_item == second_sign_item
+        ):
+            return True
+
+        first_target = self.ITEM_NAME_OVERRIDES.get(first_key)
+        second_target = self.ITEM_NAME_OVERRIDES.get(second_key)
+
+        if first_target == second_key or second_target == first_key:
+            return True
+
+        if first_target and second_target and first_target == second_target:
+            return True
+
+        return False
+
+    def _conversion_audit_expected_inventory_conversion(
+        self,
+        source_key: str,
+        item_text: str,
+        round_trip_identity: str,
+        resolver_source: str,
+    ) -> bool:
+        """
+        Identifies expected placed-block to inventory-item conversions.
+        """
+        if resolver_source not in {
+            "built-in override",
+            "built-in family or state conversion",
+            "Conversion Entries.BTSP",
+        }:
+            return False
+
+        if round_trip_identity == source_key and item_text != source_key:
+            return True
+
+        if self.ITEM_NAME_OVERRIDES.get(source_key) == item_text:
+            return True
+
+        return False
+
+    def _amulet_conversion_audit_outcome(
+        self,
+        source_key: str,
+        item_text: str,
+        resolver_source: str,
+        round_trip_identity: str,
+        normalization_candidate: str,
+    ) -> str:
+        """
+        Classifies whether Amulet confirms, aliases, differs or only suggests.
+        """
+        if resolver_source == "reviewed Amulet normalization":
+            return "reviewed normalization used"
+
+        if resolver_source == "unresolved generic identity":
+            if normalization_candidate != "(none)":
+                return "unresolved candidate"
+            return "unresolved without candidate"
+
+        if resolver_source in {
+            "built-in override",
+            "built-in family or state conversion",
+            "Conversion Entries.BTSP",
+        }:
+            if round_trip_identity == item_text:
+                return "Amulet confirms plugin result"
+
+            if self._conversion_audit_alias_equivalent(
+                item_text,
+                round_trip_identity,
+            ):
+                return "alias-aware confirmation"
+
+            if self._conversion_audit_expected_inventory_conversion(
+                source_key,
+                item_text,
+                round_trip_identity,
+                resolver_source,
+            ):
+                return "expected inventory conversion"
+
+            return "Amulet differs from plugin result"
+
+        if resolver_source in {
+            "excluded block",
+            "unsafe technical block",
+        }:
+            return "not exportable"
+
+        if round_trip_identity == item_text:
+            return "identity confirmed"
+
+        if self._conversion_audit_alias_equivalent(
+            item_text,
+            round_trip_identity,
+        ):
+            return "alias-aware identity confirmation"
+
+        return "identity differs after translation"
+
+
+    def _amulet_conversion_audit_priority(
+        self,
+        resolver_source: str,
+        normalization_candidate: str,
+        audit_outcome: str = "",
+    ) -> int:
+        """
+        Gives the most useful conversion audit entries the first report slots.
+        """
+        if resolver_source == "reviewed Amulet normalization":
+            return 0
+        if resolver_source == "unresolved generic identity":
+            return 1
+        if audit_outcome == "Amulet differs from plugin result":
+            return 2
+        if normalization_candidate != "(none)":
+            return 3
+        if resolver_source == "Conversion Entries.BTSP":
+            return 4
+        if audit_outcome in {
+            "alias-aware confirmation",
+            "expected inventory conversion",
+            "Amulet confirms plugin result",
+        }:
+            return 5
+        if resolver_source in {
+            "excluded block",
+            "unsafe technical block",
+        }:
+            return 6
+        return 7
+
+    def _amulet_conversion_audit_sort_key(self, entry):
+        """
+        Sorts audit entries by diagnostic usefulness, then by identifier.
+        """
+        (source_key, item_key), (
+            _item_text,
+            resolver_source,
+            _universal_identity,
+            _round_trip_identity,
+            normalization_candidate,
+            audit_outcome,
+        ) = entry
+        return (
+            self._amulet_conversion_audit_priority(
+                resolver_source,
+                normalization_candidate,
+                audit_outcome,
+            ),
+            str(source_key),
+            str(item_key),
+        )
+
+    def _log_amulet_conversion_decision_summary(self) -> None:
+        """
+        Summarizes retained audit outcomes without adding scan-time work.
+        """
+        outcome_counts = collections.Counter(
+            entry[5]
+            for entry in self._amulet_conversion_audit_entries.values()
+        )
+
+        reviewed_used = outcome_counts.get(
+            "reviewed normalization used",
+            0,
+        )
+        unresolved_candidates = outcome_counts.get(
+            "unresolved candidate",
+            0,
+        )
+        unresolved_without_candidate = outcome_counts.get(
+            "unresolved without candidate",
+            0,
+        )
+        plugin_confirmations = (
+            outcome_counts.get("Amulet confirms plugin result", 0)
+            + outcome_counts.get("alias-aware confirmation", 0)
+            + outcome_counts.get("expected inventory conversion", 0)
+        )
+        true_differences = outcome_counts.get(
+            "Amulet differs from plugin result",
+            0,
+        )
+        identity_confirmations = (
+            outcome_counts.get("identity confirmed", 0)
+            + outcome_counts.get("alias-aware identity confirmation", 0)
+        )
+        identity_differences = outcome_counts.get(
+            "identity differs after translation",
+            0,
+        )
+        not_exportable = outcome_counts.get(
+            "not exportable",
+            0,
+        )
+
+        self._log("Conversion decision summary:")
+        self._log(f"  Reviewed normalizations used: {reviewed_used:,}")
+        self._log(
+            f"  Unresolved candidates: {unresolved_candidates:,}"
+        )
+        self._log(
+            "  Unresolved without candidate: "
+            f"{unresolved_without_candidate:,}"
+        )
+        self._log(
+            f"  Confirmed plugin conversions: {plugin_confirmations:,}"
+        )
+        self._log(f"  True plugin / Amulet differences: {true_differences:,}")
+        self._log(
+            f"  Confirmed safe identities: {identity_confirmations:,}"
+        )
+        self._log(
+            f"  Identity differences after translation: "
+            f"{identity_differences:,}"
+        )
+        self._log(f"  Not exportable: {not_exportable:,}")
+
+    def _log_amulet_conversion_comparison_audit(self) -> None:
+        """
+        Logs bounded resolver-source and Amulet normalization comparisons.
+        """
+        self._log("Amulet conversion comparison audit:")
+        self._log(
+            "  Purpose: report-only comparison of unique scanned conversions; "
+            "exported items are not changed."
+        )
+        self._log_amulet_conversion_decision_summary()
+        self._log("")
+        self._log(
+            f"  Highest-priority unique comparisons retained: "
+            f"{len(self._amulet_conversion_audit_entries):,}"
+        )
+        active_bucket_count = sum(
+            1 for bucket in self._amulet_conversion_audit_buckets.values()
+            if bucket
+        )
+        self._log(
+            f"  Active audit priority buckets: {active_bucket_count:,}"
+        )
+
+        normalization_candidates = 0
+
+        prioritized_entries = sorted(
+            self._amulet_conversion_audit_entries.items(),
+            key=self._amulet_conversion_audit_sort_key,
+        )
+
+        for (source_key, _item_key), (
+            item_text,
+            resolver_source,
+            universal_identity,
+            round_trip_identity,
+            normalization_candidate,
+            audit_outcome,
+        ) in prioritized_entries:
+            self._log(
+                f"  {source_key} -> {item_text} [{resolver_source}]"
+            )
+            self._log(
+                f"    Amulet universal block: {universal_identity}"
+            )
+            self._log(
+                f"    Amulet round-trip block: {round_trip_identity}"
+            )
+            self._log(
+                f"    Audit outcome: {audit_outcome}"
+            )
+
+            if normalization_candidate != "(none)":
+                normalization_candidates += 1
+                if resolver_source in {
+                    "reviewed Amulet normalization",
+                    "unresolved generic identity",
+                }:
+                    self._log(
+                        f"    Normalization candidate: {normalization_candidate}"
+                    )
+                    if resolver_source == "reviewed Amulet normalization":
+                        self._log(
+                            "    Candidate status: reviewed and used for export"
+                        )
+                    else:
+                        self._log(
+                            "    Candidate status: review only; not used for export"
+                        )
+
+        self._log(
+            f"  Normalization candidates found: {normalization_candidates:,}"
+        )
+
+        omitted_unique = len(
+            self._amulet_conversion_audit_omitted_identities
+        )
+        if omitted_unique:
+            self._log(
+                f"  Additional unique comparisons omitted by limit: "
+                f"{omitted_unique:,}"
+            )
+        if self._amulet_conversion_audit_omitted_overflow:
+            self._log(
+                "  Additional omitted identities beyond tracking limit: "
+                f"{self._amulet_conversion_audit_omitted_overflow:,}"
+            )
+
+
+    def _log_amulet_translator_validation_probe(self) -> None:
+        """
+        Reports cached translator capabilities and bounded block round-trip tests.
+        """
+        self._log("Amulet translator validation probe:")
+        self._log(
+            "  Purpose: read-only local translator checks; conversion behavior "
+            "is not changed."
+        )
+
+        self._prepare_amulet_translator_capabilities()
+        version_ok, version_detail = self._amulet_translator_capabilities.get(
+            "version",
+            (False, "not available"),
+        )
+        if not version_ok or self._amulet_translator_version_object is None:
+            self._log(f"  Version object: unavailable ({version_detail})")
+            return
+
+        self._log(
+            f"  Version object source: "
+            f"{self._amulet_translator_version_source}"
+        )
+
+        for capability_name in (
+            "block.get_specification",
+            "block.to_universal",
+            "block.from_universal",
+            "item",
+        ):
+            supported, detail = self._amulet_translator_capabilities.get(
+                capability_name,
+                (False, "not checked"),
+            )
+            self._log(
+                f"  Cached capability {capability_name}: "
+                f"{'usable' if supported else 'unusable'} ({detail})"
+            )
+
+        version_obj = self._amulet_translator_version_object
+        block_translator = getattr(version_obj, "block", None)
+        block_get_specification = getattr(
+            block_translator,
+            "get_specification",
+            None,
+        )
+        block_to_universal = getattr(block_translator, "to_universal", None)
+        block_from_universal = getattr(block_translator, "from_universal", None)
+
+        probe_blocks = (
+            "minecraft:stone",
+            "minecraft:grass_block",
+            "minecraft:melon",
+            "minecraft:redstone_wire",
+            "minecraft:oak_standing_sign",
+        )
+
+        for block_identifier in probe_blocks:
+            block_namespace, block_base_name = block_identifier.split(":", 1)
+            self._log(f"  Probe {block_identifier}:")
+
+            if callable(block_get_specification):
+                ok, detail = self._diagnostic_call_summary(
+                    block_get_specification,
+                    block_namespace,
+                    block_base_name,
+                )
+                self._log(
+                    f"    block.get_specification: "
+                    f"{'success' if ok else 'failed'} ({detail})"
+                )
+            else:
+                self._log("    block.get_specification: unavailable")
+
+            universal_block = None
+            if callable(block_to_universal):
+                try:
+                    translated = block_to_universal(
+                        Block(block_namespace, block_base_name)
+                    )
+                    universal_block = (
+                        translated[0]
+                        if isinstance(translated, tuple) and translated
+                        else translated
+                    )
+                    self._log(
+                        "    block.to_universal: success "
+                        f"({self._diagnostic_result_identity(universal_block)})"
+                    )
+                except Exception as exc:
+                    self._log(
+                        f"    block.to_universal: failed "
+                        f"({type(exc).__name__})"
+                    )
+            else:
+                self._log("    block.to_universal: unavailable")
+
+            if universal_block is not None and callable(block_from_universal):
+                try:
+                    translated = block_from_universal(universal_block)
+                    round_trip_block = (
+                        translated[0]
+                        if isinstance(translated, tuple) and translated
+                        else translated
+                    )
+                    self._log(
+                        "    block.from_universal: success "
+                        f"({self._diagnostic_result_identity(round_trip_block)})"
+                    )
+                except Exception as exc:
+                    self._log(
+                        f"    block.from_universal: failed "
+                        f"({type(exc).__name__})"
+                    )
+            elif not callable(block_from_universal):
+                self._log("    block.from_universal: unavailable")
+            else:
+                self._log("    block.from_universal: not run")
+
+        item_supported, item_detail = self._amulet_translator_capabilities.get(
+            "item",
+            (False, "not checked"),
+        )
+        if not item_supported:
+            self._log(
+                "  Item translator tests skipped after the cached probe marked "
+                f"the translator unusable ({item_detail})."
+            )
+
+
+    def _log_conversion_entries_summary(self) -> None:
+        """
+        Adds non-sensitive conversion-entry status to the export report.
+        """
+        enabled = self.use_conversion_entries.GetValue()
+        self._log(f"Conversion Entries rules enabled: {enabled}")
+        if not enabled:
+            return
+
+        self._log(
+            f"Conversion Entries file found: "
+            f"{self._get_existing_conversion_entries_path() is not None}"
+        )
+        self._log("Conversion Entries file modified by plugin: False")
+        self._log(
+            f"Conversion Entries rules loaded: "
+            f"{self._conversion_entries_loaded_count:,}"
+        )
+        self._log(
+            f"Conversion Entries rules used: "
+            f"{len(self._conversion_entries_used):,}"
+        )
+
+        if self._unresolved_write_attempt_counts:
+            self._log("")
+            self._log("Unresolved item write attempts:")
+            for unresolved_name in sorted(
+                self._unresolved_write_attempt_counts.keys()
+            ):
+                unresolved_count = self._unresolved_write_attempt_counts[
+                    unresolved_name
+                ]
+                self._log(
+                    f"  {unresolved_name} -> {unresolved_count:,} "
+                    "(in-game verification required)"
+                )
+
+        if self._conversion_entries_load_error:
+            self._log(
+                f"Conversion Entries load issue: "
+                f"{self._conversion_entries_load_error}"
+            )
+
+        skipped_count = sum(self._conversion_entries_skip_reason_counts.values())
+        if skipped_count:
+            self._log(
+                f"Conversion Entries rules skipped: "
+                f"{skipped_count:,}"
+            )
+            self._log("Conversion Entries skipped rules by reason:")
+            for reason in sorted(self._conversion_entries_skip_reason_counts):
+                count = self._conversion_entries_skip_reason_counts[reason]
+                self._log(f"  {reason}: {count:,}")
+
+            if self._conversion_entries_skip_details:
+                self._log("Conversion Entries skipped rule details:")
+                for detail in self._conversion_entries_skip_details:
+                    self._log(f"  {detail}")
+
+            if self._conversion_entries_skip_detail_overflow:
+                self._log(
+                    "  Additional rejected rule details omitted: "
+                    f"{self._conversion_entries_skip_detail_overflow:,}"
+                )
+
+    # ---------------------------------------------------------------------
+    # Installed language fallback and ABC display names
+    # ---------------------------------------------------------------------
     def _detect_installed_language_file(self) -> Optional[Path]:
         """
         Checks known Minecraft for Windows locations without recursive searching.
@@ -5538,11 +10341,22 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return None
 
-    def _get_selected_language_file(self) -> Optional[Path]:
+    def _get_selected_language_file(
+        self,
+        require_enabled: bool = True,
+    ) -> Optional[Path]:
         """
         Returns the configured or automatically detected language file.
+
+        Normal operation access requires either runtime language fallback or
+        the dedicated pre-operation Found Entries update setting. Explicit
+        file-management synchronization may resolve the configured file even
+        when both operation-time settings are disabled.
         """
-        if not self.use_installed_language_data.GetValue():
+        if require_enabled and not (
+            self.use_installed_language_data.GetValue()
+            or self.save_found_language_entries.GetValue()
+        ):
             return None
 
         configured = self.language_file_path.GetValue().strip()
@@ -5619,10 +10433,16 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         self._load_found_entries_file()
 
-        if not self.use_installed_language_data.GetValue():
+        installed_language_requested = (
+            self.use_installed_language_data.GetValue()
+            or self.save_found_language_entries.GetValue()
+        )
+        if not installed_language_requested:
             return bool(self._found_entries_aliases)
 
-        language_path = self._get_selected_language_file()
+        language_path = self._get_selected_language_file(
+            require_enabled=False,
+        )
         if language_path is None:
             self._external_language_load_error = "Language file not found."
             return bool(self._found_entries_aliases)
@@ -5691,6 +10511,155 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             return
 
         self._pending_found_entries[language_key] = display_name
+
+    def _queue_missing_installed_language_entries(
+        self,
+        require_save_setting: bool = True,
+    ) -> int:
+        """
+        Queues every relevant installed-language entry missing from local data.
+
+        Relevance is intentionally limited to safe ``tile.*.name``,
+        ``item.*.name`` and ``block.*.name`` entries accepted by the existing
+        display-name parser. Entries already represented by the embedded table
+        or by Found Entries.BTSP are skipped by normalized alias so equivalent
+        language keys are not duplicated.
+        """
+        self._found_entries_sync_queued_count = 0
+
+        if (
+            require_save_setting
+            and not self.save_found_language_entries.GetValue()
+        ):
+            return 0
+
+        if not self._external_language_aliases:
+            return 0
+
+        existing_aliases = dict(self._found_entries_aliases)
+        existing_raw_entries = dict(self._found_entries_raw_entries)
+
+        # File-manager synchronization must also respect an existing cache when
+        # runtime cache use is disabled, so read it directly for comparison.
+        existing_path = self._get_existing_found_entries_path()
+        if existing_path is not None:
+            try:
+                file_aliases, file_raw_entries = self._parse_display_name_file(
+                    existing_path
+                )
+                for alias, value in file_aliases.items():
+                    existing_aliases.setdefault(alias, value)
+                for language_key, display_name in file_raw_entries.items():
+                    existing_raw_entries.setdefault(language_key, display_name)
+            except Exception:
+                # The atomic writer performs its own guarded read and reports a
+                # concrete error if the destination cannot be preserved.
+                pass
+
+        queued_count = 0
+        for alias, (
+            language_key,
+            display_name,
+        ) in sorted(self._external_language_aliases.items()):
+            if alias in self.BEDROCK_EN_US_DISPLAY_NAMES:
+                continue
+            if alias in existing_aliases:
+                continue
+            if language_key in existing_raw_entries:
+                continue
+            if language_key in self._pending_found_entries:
+                continue
+            if not self._is_safe_language_value(display_name):
+                continue
+
+            self._pending_found_entries[str(language_key)] = str(display_name)
+            queued_count += 1
+
+        self._found_entries_sync_queued_count = queued_count
+        return queued_count
+
+    def _synchronize_found_entries_from_language_file(self) -> None:
+        """
+        Explicitly refreshes Found Entries.BTSP from the configured lang file.
+
+        This file-management action works independently of whether installed
+        language fallback is enabled for normal operations. It never replaces
+        embedded names or existing cache entries.
+        """
+        self._clear_loaded_display_name_data()
+        language_path = self._get_selected_language_file(
+            require_enabled=False,
+        )
+
+        if language_path is None:
+            wx.MessageBox(
+                "No readable Minecraft en_US.lang file was found.\n\n"
+                "Choose the file in Display-name data or enable automatic "
+                "detection, then try again.",
+                "Blocks to Storage",
+                wx.OK | wx.ICON_WARNING,
+                self,
+            )
+            return
+
+        try:
+            modified_time = language_path.stat().st_mtime_ns
+            (
+                self._external_language_aliases,
+                self._external_language_raw_entries,
+            ) = self._parse_display_name_file(language_path)
+            self._external_language_loaded_path = str(language_path)
+            self._external_language_loaded_mtime = modified_time
+            self._external_language_loaded_count = len(
+                self._external_language_aliases
+            )
+            self._external_language_prepared = True
+        except Exception as exc:
+            self._external_language_load_error = str(exc)
+            wx.MessageBox(
+                f"Could not read the selected Minecraft language file.\n\n"
+                f"Reason: {exc}",
+                "Blocks to Storage",
+                wx.OK | wx.ICON_WARNING,
+                self,
+            )
+            return
+
+        queued_count = self._queue_missing_installed_language_entries(
+            require_save_setting=False,
+        )
+        self._write_pending_found_entries()
+
+        if self._found_entries_write_error:
+            wx.MessageBox(
+                f"The language file was scanned, but "
+                f"{self.FOUND_ENTRIES_FILENAME} could not be updated.\n\n"
+                f"Reason: {self._found_entries_write_error}",
+                "Blocks to Storage",
+                wx.OK | wx.ICON_WARNING,
+                self,
+            )
+            return
+
+        added_count = self._found_entries_written_count
+        if queued_count == 0:
+            result_text = (
+                f"{self.FOUND_ENTRIES_FILENAME} is already up to date."
+            )
+        else:
+            result_text = (
+                f"Added {added_count:,} new display-name "
+                f"entr{'y' if added_count == 1 else 'ies'} to "
+                f"{self.FOUND_ENTRIES_FILENAME}."
+            )
+
+        wx.MessageBox(
+            f"Scanned {self._external_language_loaded_count:,} relevant "
+            f"language aliases from:\n{language_path}\n\n{result_text}",
+            "Blocks to Storage",
+            wx.OK | wx.ICON_INFORMATION,
+            self,
+        )
 
     def _write_pending_found_entries(self) -> None:
         """
@@ -5812,6 +10781,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 f"{len(self._external_language_used):,}"
             )
             self._log(
+                f"Installed language entries queued for cache sync: "
+                f"{self._found_entries_sync_queued_count:,}"
+            )
+            self._log(
                 f"New entries written to {self.FOUND_ENTRIES_FILENAME}: "
                 f"{self._found_entries_written_count:,}"
             )
@@ -5882,27 +10855,49 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             self.ABC_SORT_NAME_OVERRIDES.get(item_name, ""),
         ]
 
-        if self._is_banner_item_key(item_name):
-            try:
-                banner_damage = int(item_name.replace(self.BANNER_ITEM_PREFIX, "", 1))
-            except Exception:
-                banner_damage = 0
-
-            color_name = self.BANNER_COLOR_NAME_BY_DAMAGE.get(
-                max(0, min(15, banner_damage)),
-                "white",
-            )
+        # Several older Bedrock families, especially wooden and stone slabs,
+        # are stored in en_US.lang under grouped keys such as
+        # ``tile.wooden_slab.oak.name``. Add only reviewed aliases for the
+        # matching item so a missing direct alias can still resolve safely.
+        item_alias = self._normalize_display_name_for_audit(item_name)
+        actual_alias = self._normalize_display_name_for_audit(actual_name)
+        for legacy_lookup_alias in (item_alias, actual_alias):
             raw_candidates.extend(
-                (
-                    f"banner_{color_name}",
-                    f"{color_name}_banner",
+                self.LEGACY_DISPLAY_NAME_ALIASES.get(
+                    legacy_lookup_alias,
+                    (),
                 )
             )
+
+        if self._is_banner_item_key(item_name):
+            banner_damage, banner_type = self._get_banner_item_parts(item_name)
+
+            if banner_type == 1:
+                raw_candidates.extend(
+                    (
+                        "banner_illager_captain",
+                        "ominous_banner",
+                    )
+                )
+            else:
+                color_name = self.BANNER_COLOR_NAME_BY_DAMAGE.get(
+                    max(0, min(15, banner_damage)),
+                    "white",
+                )
+                raw_candidates.extend(
+                    (
+                        f"banner_{color_name}",
+                        f"{color_name}_banner",
+                    )
+                )
 
         candidates: List[str] = []
         seen = set()
 
         def add_candidate(candidate_value: str) -> None:
+            """
+            Adds one normalized audit lookup candidate without duplicates.
+            """
             normalized = self._normalize_display_name_for_audit(candidate_value)
             if normalized and normalized not in seen:
                 candidates.append(normalized)
@@ -6181,7 +11176,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
 
     # ---------------------------------------------------------------------
-    # Item packing
+    # ABC ordering and item packing
     # ---------------------------------------------------------------------
     def _normalize_abc_sort_text(self, display_name: str) -> str:
         """
@@ -6227,10 +11222,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         item_name = str(item_name)
 
         if self._is_banner_item_key(item_name):
-            try:
-                banner_damage = int(item_name.replace(self.BANNER_ITEM_PREFIX, "", 1))
-            except Exception:
-                banner_damage = 0
+            banner_damage, banner_type = self._get_banner_item_parts(item_name)
+
+            if banner_type == 1:
+                return self._normalize_abc_sort_text("ominous_banner")
 
             color_name = self.BANNER_COLOR_NAME_BY_DAMAGE.get(
                 max(0, min(15, banner_damage)),
@@ -6642,24 +11637,53 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         block_id = chunk.blocks[dx, y, dz]
         return self._try_get_palette_block(chunk.block_palette, block_id)
 
-    def _get_block_for_scan(self, x: int, y: int, z: int, chunk_cache: Dict[Tuple[int, int], object]):
+    def _make_scan_air(self) -> Block:
         """
-        Returns the block at a position using fast direct scan or safe Amulet fallback.
+        Builds a Bedrock air block for positions inside absent world chunks.
+        """
+        return Block("minecraft", "air")
+
+    def _get_block_for_scan(
+        self,
+        x: int,
+        y: int,
+        z: int,
+        chunk_cache: Dict[Tuple[int, int], object],
+    ):
+        """
+        Returns a scanned block using direct chunk access or Amulet fallback.
+
+        A selection may extend into chunks that have never been generated.
+        Those positions are empty and must be treated as air rather than as a
+        fatal scan error.
         """
         if self.fast_direct_scan.GetValue() and not self._fast_scan_failed:
-            try:
-                cx, cz = self._chunk_coords(x, z)
-                key = (cx, cz)
+            cx, cz = self._chunk_coords(x, z)
+            key = (cx, cz)
 
+            if key in self._missing_scan_chunks:
+                return self._make_scan_air()
+
+            try:
                 if key not in chunk_cache:
                     chunk_cache[key] = self._get_chunk(cx, cz)
 
                 chunk = chunk_cache[key]
                 return self._get_block_direct_from_chunk(chunk, x, y, z)
             except Exception as exc:
+                error_text = str(exc)
+
+                if error_text.startswith("Could not load chunk"):
+                    self._missing_scan_chunks.add(key)
+                    chunk_cache.pop(key, None)
+                    return self._make_scan_air()
+
                 self._fast_scan_failed = True
-                self._fast_scan_fail_reason = str(exc)
-                self._log(f"Fast direct chunk scan failed. Falling back to safe scan. Reason: {exc}")
+                self._fast_scan_fail_reason = error_text
+                self._log(
+                    "Fast direct chunk scan failed. Falling back to safe scan. "
+                    f"Reason: {exc}"
+                )
 
         return self._get_block_safe_for_scan(x, y, z)
 
@@ -6756,7 +11780,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     # ---------------------------------------------------------------------
     def _scan_selection(self):
         """
-        Scans the selection, counts exportable blocks and records protected positions.
+        Scans the selection, counts source blocks and resulting items,
+        and records protected positions.
         """
         counts: Dict[str, int] = collections.defaultdict(int)
         skipped_counts: Dict[str, int] = collections.defaultdict(int)
@@ -6767,11 +11792,19 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._fast_scan_failed = False
         self._fast_scan_fail_reason = ""
         self._ambiguous_fast_scan_fallbacks = 0
+        self._missing_scan_chunks = set()
+        self._unresolved_write_attempt_counts = collections.defaultdict(int)
+        self._built_in_scan_identity_recoveries = collections.defaultdict(int)
+        self._installed_language_scan_identity_recoveries = collections.defaultdict(int)
+        self._found_entry_scan_identity_recoveries = collections.defaultdict(int)
+        self._scan_identity_diagnostics = collections.defaultdict(int)
+        self._scan_identity_diagnostic_overflow = 0
 
         min_x = min_y = min_z = None
         max_x = max_y = max_z = None
 
         scanned_positions = 0
+        exportable_source_blocks = 0
         scan_progress_start = time.perf_counter()
         chunk_cache: Dict[Tuple[int, int], object] = {}
 
@@ -6818,8 +11851,45 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 try:
                     safe_block, safe_block_entity = self._get_block_and_entity_safe_for_scan(x, y, z)
                     safe_export_key, safe_skipped_key = self._classify_block(safe_block, safe_block_entity)
+                    (
+                        recovered_item_key,
+                        recovery_source,
+                    ) = self._resolve_scan_identity(
+                        block,
+                        raw_scan_key,
+                        safe_export_key or safe_skipped_key,
+                    )
 
-                    if safe_export_key is not None or safe_skipped_key is not None:
+                    self._record_scan_identity_result(
+                        block,
+                        raw_scan_key,
+                        safe_block,
+                        safe_export_key or safe_skipped_key,
+                        recovered_item_key,
+                        recovery_source,
+                    )
+
+                    if recovered_item_key is not None:
+                        # External state-specific recoveries remain inactive
+                        # candidate observations when recording is enabled.
+                        # Built-in integrated identities are already reviewed,
+                        # so they are deliberately excluded from that file.
+                        if recovery_source in (
+                            self.FOUND_ENTRIES_FILENAME,
+                            self.INSTALLED_LANGUAGE_SOURCE_LABEL,
+                        ):
+                            self._queue_conversion_candidate(
+                                block,
+                                raw_scan_key,
+                                recovered_item_key,
+                                allow_resolved_family=True,
+                            )
+                        scan_block = block
+                        export_key = recovered_item_key
+                        skipped_key = None
+                        if ambiguous_lookup_needed:
+                            self._ambiguous_fast_scan_fallbacks += 1
+                    elif safe_export_key is not None or safe_skipped_key is not None:
                         scan_block = safe_block
                         export_key = safe_export_key
                         skipped_key = safe_skipped_key
@@ -6844,21 +11914,51 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 skipped_reason = self._get_skipped_block_reason(skipped_key)
                 skipped_counts[skipped_key] += 1
                 skipped_by_reason[skipped_reason][skipped_key] += 1
+                if extra_export_items:
+                    exportable_source_blocks += 1
                 for extra_item_name, extra_amount in extra_export_items:
                     self._record_export_count(counts, extra_item_name, extra_amount)
                 continue
 
             if export_key is not None:
+                exportable_source_blocks += 1
                 export_amount = self._get_candle_export_amount(scan_block, export_key)
+                export_amount *= self._get_raw_double_slab_export_multiplier(
+                    block,
+                    raw_scan_key,
+                    export_key,
+                )
                 self._record_export_count(counts, export_key, export_amount)
+
+                if (
+                    export_key in self.GENERIC_UNSAFE_ITEM_BLOCKS
+                    and self.attempt_unresolved_item_writes.GetValue()
+                ):
+                    self._unresolved_write_attempt_counts[export_key] += export_amount
 
             for extra_item_name, extra_amount in extra_export_items:
                 self._record_export_count(counts, extra_item_name, extra_amount)
 
         if min_x is None:
-            return counts, skipped_counts, skipped_by_reason, protected_positions, None, scanned_positions
+            return (
+                counts,
+                skipped_counts,
+                skipped_by_reason,
+                protected_positions,
+                None,
+                scanned_positions,
+                exportable_source_blocks,
+            )
 
-        return counts, skipped_counts, skipped_by_reason, protected_positions, (min_x, min_y, min_z, max_x, max_y, max_z), scanned_positions
+        return (
+            counts,
+            skipped_counts,
+            skipped_by_reason,
+            protected_positions,
+            (min_x, min_y, min_z, max_x, max_y, max_z),
+            scanned_positions,
+            exportable_source_blocks,
+        )
 
     def _is_protected_position(
         self,
@@ -7020,6 +12120,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         current_primary = 0
 
         def make_pos(visual_primary_index: int, line_index: int, vertical_offset: int) -> Tuple[int, int, int]:
+            """
+            Converts visual row placement into a world-space container position.
+            """
             primary_offset = self._get_primary_offset_for_visual_index(
                 primary_axis,
                 visual_primary_index,
@@ -7215,6 +12318,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         current_primary_block = 0
 
         def make_pair(visual_primary_block: int, line_index: int, vertical_offset: int):
+            """
+            Converts visual row placement into paired double-chest positions.
+            """
             primary_block_offset = self._get_double_chest_primary_offset_for_visual_index(
                 pair_axis,
                 visual_primary_block,
@@ -7718,6 +12824,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         ] = []
 
         def record_skip(item_name: str, reason: str) -> None:
+            """
+            Records one skipped item-frame label and groups it by reason.
+            """
             nonlocal skipped_frames
             skipped_frames += 1
             safe_name = str(item_name).strip() or "<empty item name>"
@@ -7856,17 +12965,59 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         """
         total_start = time.perf_counter()
         self._reset_external_language_operation_state()
+        self._reset_conversion_operation_state()
+        self._reset_amulet_translator_capability_state()
 
         if (
             self.use_found_entries_cache.GetValue()
             or self.use_installed_language_data.GetValue()
+            or self.save_found_language_entries.GetValue()
         ):
             self._ensure_external_language_data_loaded()
+
+        # The dedicated update checkbox is the only automatic operation-time
+        # permission to scan the full configured language file and merge new
+        # entries. Runtime fallback may read the file for unresolved names and
+        # conservative identity recovery, but it does not update Found Entries
+        # unless this checkbox is also enabled.
+        if self.save_found_language_entries.GetValue():
+            self._queue_missing_installed_language_entries()
+            self._write_pending_found_entries()
+
+        if self.use_conversion_entries.GetValue():
+            self._ensure_conversion_entries_loaded()
 
         try:
             self._log("Blocks to Storage Export Report")
             self._log(f"Created: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             self._log("")
+
+            if (
+                self.use_installed_language_data.GetValue()
+                or self.save_found_language_entries.GetValue()
+            ):
+                self._log(
+                    f"Installed language aliases prepared before scan: "
+                    f"{self._external_language_loaded_count:,}"
+                )
+                if self.save_found_language_entries.GetValue():
+                    self._log(
+                        f"Found Entries pre-scan update: "
+                        f"{self._found_entries_written_count:,} new entr"
+                        f"{'y' if self._found_entries_written_count == 1 else 'ies'}"
+                    )
+                if self._external_language_load_error:
+                    self._log(
+                        f"Installed language preparation issue: "
+                        f"{self._external_language_load_error}"
+                    )
+                if self._found_entries_write_error:
+                    self._log(
+                        f"{self.FOUND_ENTRIES_FILENAME} pre-scan write issue: "
+                        f"{self._found_entries_write_error}"
+                    )
+                self._log("")
+
             self._log("Starting block scan...")
             self._log(f"World wrapper: {self._world_platform} / {self._world_version}")
             self._log(f"Fast direct chunk scan: {self.fast_direct_scan.GetValue()}")
@@ -7874,10 +13025,30 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             self._log(f"Large selection warning enabled: {self.show_large_selection_warning.GetValue()}")
             self._log(f"Item frame label audit enabled: {self.include_item_frame_audit.GetValue()}")
             self._log(f"Display-name ABC audit enabled: {self.include_display_name_audit.GetValue()}")
+            self._log(f"Amulet conversion capability diagnostic enabled: {self.include_amulet_conversion_diagnostic.GetValue()}")
+            self._log(f"Amulet translator validation probe enabled: {self.include_amulet_translator_probe.GetValue()}")
+            self._log(f"Reviewed Amulet normalization enabled: {self.use_reviewed_amulet_normalization.GetValue()}")
+            self._log(
+                "Attempt unresolved item writes: "
+                f"{self.attempt_unresolved_item_writes.GetValue()}"
+            )
+            self._log(f"Amulet conversion comparison audit enabled: {self.include_amulet_conversion_audit.GetValue()}")
             self._log(f"Found Entries cache enabled: {self.use_found_entries_cache.GetValue()}")
             self._log(f"Installed language fallback enabled: {self.use_installed_language_data.GetValue()}")
-            self._log(f"Save found display-name entries: {self.save_found_language_entries.GetValue()}")
+            self._log(
+                f"Keep Found Entries updated from installed language file: "
+                f"{self.save_found_language_entries.GetValue()}"
+            )
             self._log(f"Simulate missing display-name entry: {self.simulate_missing_display_name.GetValue()}")
+            self._log(f"Conversion Entries rules enabled: {self.use_conversion_entries.GetValue()}")
+            self._log(
+                f"Record conversion candidates: "
+                f"{self.record_conversion_candidates.GetValue()}"
+            )
+            self._log(
+                "Record all resolved conversion observations: "
+                f"{self.record_all_conversion_observations.GetValue()}"
+            )
             if self.simulate_missing_display_name.GetValue():
                 self._log(
                     f"Simulated missing alias: "
@@ -7897,10 +13068,18 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
             if container == self.CONTAINER_SHULKER:
                 self._log(f"Shulker color: {self.shulker_color_choice.GetStringSelection()}")
-                self._log("Shulker facing: sideways/inward")
+                self._log("Shulker facing: sideways / inward")
 
             scan_start = time.perf_counter()
-            counts, skipped_counts, skipped_by_reason, protected_positions, bounds, scanned_positions = self._scan_selection()
+            (
+                counts,
+                skipped_counts,
+                skipped_by_reason,
+                protected_positions,
+                bounds,
+                scanned_positions,
+                exportable_source_blocks,
+            ) = self._scan_selection()
             scan_time = time.perf_counter() - scan_start
 
             if not bounds:
@@ -7923,11 +13102,26 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             else:
                 self._log("Fast direct chunk scan result: disabled")
 
+            if self._missing_scan_chunks:
+                self._log(
+                    f"Missing chunks treated as air: "
+                    f"{len(self._missing_scan_chunks):,}"
+                )
+
             if self._ambiguous_fast_scan_fallbacks:
                 self._log(f"Ambiguous fast scan block fallbacks: {self._ambiguous_fast_scan_fallbacks:,}")
 
+            if (
+                self._built_in_scan_identity_recoveries
+                or self._found_entry_scan_identity_recoveries
+                or self._installed_language_scan_identity_recoveries
+                or self._scan_identity_diagnostics
+                or self._scan_identity_diagnostic_overflow
+            ):
+                self._log_scan_identity_summary()
+
             if not counts:
-                self._log("No exportable blocks found.")
+                self._log("No exportable items found.")
 
                 self._log("")
                 self._log_skipped_block_report(skipped_counts, skipped_by_reason)
@@ -7938,7 +13132,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
             planning_start = time.perf_counter()
 
-            total_blocks = sum(counts.values())
+            total_items = sum(counts.values())
             total_skipped = sum(skipped_counts.values())
 
             inventories, group_starts = self._build_container_payloads_and_group_starts(counts)
@@ -7971,7 +13165,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             planning_time = time.perf_counter() - planning_start
 
             self._log("")
-            self._log(f"Exportable blocks found: {total_blocks:,}")
+            self._log(
+                f"Exportable source blocks found: {exportable_source_blocks:,}"
+            )
+            self._log(f"Exportable items produced: {total_items:,}")
             self._log(f"Skipped non-air blocks: {total_skipped:,}")
 
             if use_double_chests:
@@ -7998,7 +13195,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             self._log(f"Planning time: {self._format_seconds(planning_time)}")
 
             self._log("")
-            self._log("Exported blocks:")
+            self._log("Exported items:")
             for item_name in self._get_ordered_item_names(counts):
                 self._log(f"{item_name} -> {counts[item_name]:,}")
 
@@ -8007,8 +13204,63 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 self._log_display_name_audit(counts)
 
             self._write_pending_found_entries()
+            self._write_pending_conversion_candidates()
             self._log("")
             self._log_external_language_summary()
+            self._log_conversion_entries_summary()
+            self._log(
+                f"Conversion candidate recording enabled: "
+                f"{self.record_conversion_candidates.GetValue()}"
+            )
+            if self.record_conversion_candidates.GetValue():
+                self._log(
+                    f"Conversion candidate records collected this operation: "
+                    f"{len(self._pending_conversion_candidates):,}"
+                )
+                self._log(
+                    f"Conversion candidate observations collected this operation: "
+                    f"{sum(self._pending_conversion_candidates.values()):,}"
+                )
+                self._log(
+                    f"Conversion candidate records already in file: "
+                    f"{self._conversion_candidates_existing_record_count:,}"
+                )
+                self._log(
+                    f"Conversion candidate new records added: "
+                    f"{self._conversion_candidates_new_record_count:,}"
+                )
+                self._log(
+                    f"Conversion candidate existing records updated: "
+                    f"{self._conversion_candidates_updated_record_count:,}"
+                )
+                self._log(
+                    f"Conversion candidate observations added: "
+                    f"{self._conversion_candidate_observations_added_count:,}"
+                )
+                self._log(
+                    f"Conversion candidate total records after write: "
+                    f"{self._conversion_candidates_total_record_count:,}"
+                )
+                if self._conversion_candidates_write_error:
+                    self._log(
+                        f"Conversion candidate write issue: "
+                        f"{self._conversion_candidates_write_error}"
+                    )
+            if self.include_amulet_conversion_diagnostic.GetValue():
+                self._log("")
+                self._log_amulet_conversion_capability_diagnostic()
+
+            if self.include_amulet_translator_probe.GetValue():
+                self._log("")
+                self._log_amulet_translator_validation_probe()
+
+            if self.use_reviewed_amulet_normalization.GetValue():
+                self._log("")
+                self._log_reviewed_amulet_normalization_summary()
+
+            if self.include_amulet_conversion_audit.GetValue():
+                self._log("")
+                self._log_amulet_conversion_comparison_audit()
 
             self._log("")
             self._log_skipped_block_report(skipped_counts, skipped_by_reason)
@@ -8044,9 +13296,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             if self.preserve_bedrock.GetValue():
                 self._log(f"Preserved bedrock blocks during clear: {preserved_bedrock:,}")
 
-            self._log(f"Cleared blocks: {cleared_blocks:,}")
+            self._log(f"Selected positions cleared: {cleared_blocks:,}")
             self._log(f"Clear time: {self._format_seconds(clear_time)}")
-            self._log(f"Clear speed: {self._format_rate(cleared_blocks, clear_time, 'blocks')}")
+            self._log(f"Clear speed: {self._format_rate(cleared_blocks, clear_time, 'positions')}")
             self._log(f"Fast direct chunk clear result: {fast_clear_result}")
 
             if self._fast_clear_failed:
@@ -8101,6 +13353,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 self._finalize_report()
             finally:
                 self._release_operation_display_name_caches()
+                self._release_operation_conversion_caches()
+                self._release_amulet_translator_capability_state()
 
 
 export = dict(name="Blocks to Storage", operation=PluginClassName)
