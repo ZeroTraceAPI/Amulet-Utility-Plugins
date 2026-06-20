@@ -12,7 +12,7 @@ The collection is designed for map creators, builders, technical players, tester
 
 Places selected light sources across Minecraft Bedrock world regions using fixed-radius or optional brightness-aware coverage. It supports configurable spacing, attachment rules, conservative plant replacement, persistent settings, and operation reports.
 
-### [Auto Farmland](Plugins/Auto%20Farmland) (Coming Soon)
+### [Auto Farmland](Plugins/Auto%20Farmland)
 
 Converts eligible exposed terrain into farmland and can plant single crops, alternating rows, assorted crops, or melon and pumpkin stem layouts. It also supports repeatable growth patterns, existing-hydration detection, safe irrigation, and 67 selectable waterlogged upper-slab covers.
 
