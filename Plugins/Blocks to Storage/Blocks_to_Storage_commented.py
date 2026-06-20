@@ -1,7 +1,7 @@
 """Blocks to Storage plugin for Amulet Map Editor.
 
 Purpose:
-- Scan the selected Bedrock world area.
+- Scan the selected Minecraft Bedrock Edition world area.
 - Count exportable source blocks and resulting inventory items.
 - Clear selected blocks while preserving protected blocks such as bedrock.
 - Place the collected items into chests, double chests, barrels or shulker boxes.
@@ -45,10 +45,9 @@ from amulet.api.block import Block
 from amulet.api.block_entity import BlockEntity
 
 try:
-    from amulet.api.item import Item, BlockItem
+    from amulet.api.item import Item
 except Exception:  # pragma: no cover
     Item = None
-    BlockItem = None
 
 try:
     from amulet_nbt import (
@@ -212,7 +211,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:glow_frame",
     }
 
-    # Fast direct chunk scan can expose older generic Bedrock block names.
+    # Fast direct chunk scan can expose older generic Minecraft Bedrock
+    # Edition block names.
     # These names are useful for counting but are sometimes not safe as item
     # names in inventories or item frames, so the scanner falls back to the
     # safer Amulet translation call only for these specific blocks.
@@ -505,7 +505,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     # Generic fallback names that should not be written directly as items.
     # If a safer Amulet lookup still returns one of these names, the block is
     # skipped instead of risking empty / ghost storage entries. Some entries
-    # may become mapped later once their exact Bedrock item NBT is confirmed.
+    # may become mapped later once their exact Minecraft Bedrock Edition item NBT is confirmed.
     GENERIC_UNSAFE_ITEM_BLOCKS = {
         "minecraft:slab",
         "minecraft:double_slab",
@@ -543,7 +543,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:coral_fan_hang3",
     }
 
-    # Some Bedrock block names need to be corrected before they are written
+    # Some Minecraft Bedrock Edition block names need to be corrected before
+    # they are written
     # as inventory or item frame item names. This keeps aliases from creating
     # empty / ghost item entries.
     ITEM_NAME_OVERRIDES = {
@@ -838,7 +839,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "grey": "gray",
     }
 
-    # Some valid Bedrock items still use grouped or legacy language keys rather
+    # Some valid Minecraft Bedrock Edition items still use grouped or legacy
+    # language keys rather
     # than a direct ``tile.<item>.name`` entry. These aliases are display-name
     # lookup hints only. They never change conversion, item identifiers, damage,
     # NBT, storage contents or item-frame data.
@@ -880,7 +882,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     BANNER_ITEM_PREFIX = "minecraft:banner_damage_"
 
-    # Banner item damage values use the legacy Bedrock banner color order,
+    # Banner item damage values use the legacy Minecraft Bedrock Edition
+    # banner color order,
     # which is different from the normal dye / bed color order used elsewhere.
     # The internal banner item key still writes as minecraft:banner with damage,
     # but ABC sorting uses this visible color name so banners sort by their
@@ -908,7 +911,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         color_index: color_name for color_index, color_name in enumerate(BANNER_COLOR_NAMES_BY_DAMAGE)
     }
 
-    # Generated from the Bedrock Edition en_US.lang file. Verified display
+    # Generated from the Minecraft Bedrock Edition en_US.lang file. Verified display
     # names are used only for ABC sorting and the optional display-name audit.
     # They do not change conversion, item NBT, storage contents or placement.
     BEDROCK_EN_US_DISPLAY_NAMES = {'acacia_button': ('tile.acacia_button.name', 'Acacia Button'),
@@ -2727,7 +2730,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
  'yellow_flower_dandelion': ('tile.yellow_flower.dandelion.name', 'Dandelion'),
  'yellow_harness': ('item.yellow_harness.name', 'Yellow Harness')}
 
-    # Newer Bedrock sulfur and cinnabar block names verified from the
+    # Newer Minecraft Bedrock Edition sulfur and cinnabar block names
+    # verified from the
     # installed en_US.lang file and runtime-tested across direct blocks,
     # slabs, double slabs, stairs and walls. These embedded names support
     # ABC sorting and conservative identity recovery without requiring
@@ -2885,11 +2889,12 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     )
 
     # Names listed here are excluded from automatic language-based sorting
-    # and audit conclusions until their Bedrock inventory identities are
+    # and audit conclusions until their Minecraft Bedrock Edition inventory identities are
     # verified directly.
     DISPLAY_NAME_AUDIT_MANUAL_REVIEW = set()
 
-    # Some Bedrock inventory item names are legacy / internal names that do
+    # Some Minecraft Bedrock Edition inventory item names are legacy /
+    # internal names that do
     # not match the item name users see in-game. This map is only for ABC
     # sorting and report / readability order. It does not change the actual
     # item NBT written into storage or item frames.
@@ -2916,7 +2921,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         "minecraft:dirt_with_roots": "rooted_dirt",
     }
 
-    # Some inventory items use one Bedrock item name plus a damage value instead
+    # Some inventory items use one Minecraft Bedrock Edition item name plus
+    # a damage value instead
     # of one unique item ID per color or state.
     ITEM_FRAME_NO_BLOCK_TAG_ITEMS = {
         "minecraft:bed",
@@ -3097,11 +3103,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         # the installed-language fallback, Found Entries cache, or the
         # dedicated pre-operation Found Entries update setting.
         self._external_language_aliases: Dict[str, Tuple[str, str]] = {}
-        self._external_language_raw_entries: Dict[str, str] = {}
         self._found_entries_aliases: Dict[str, Tuple[str, str]] = {}
         self._found_entries_raw_entries: Dict[str, str] = {}
         self._external_language_loaded_path = ""
-        self._external_language_loaded_mtime = None
         self._external_language_load_error = ""
         self._external_language_loaded_count = 0
         self._external_language_used: Dict[str, Tuple[str, str, str]] = {}
@@ -3129,7 +3133,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._conversion_entries_loaded_count = 0
         self._conversion_entries_prepared = False
         self._pending_conversion_candidates = collections.defaultdict(int)
-        self._conversion_candidates_written_count = 0
         self._conversion_candidates_new_record_count = 0
         self._conversion_candidates_updated_record_count = 0
         self._conversion_candidate_observations_added_count = 0
@@ -3143,7 +3146,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._settings_config_applying = False
         self._settings_config_load_error = ""
         self._settings_config_write_error = ""
-        self._settings_config_unknown_data = {}
         self._settings_defaults = {}
 
         self._amulet_translator_capabilities: Dict[str, Tuple[bool, str]] = {}
@@ -3733,7 +3735,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         )
         self._set_tooltip(
             self.fast_direct_scan,
-            "Scans blocks directly from chunk data instead of calling get_version_block for every selected block. This is much faster on large selections, but some older / legacy block names may be less specific.",
+            "Scans blocks directly from chunk data instead of calling "
+            "get_version_block for every selected block. This is much faster on "
+            "large selections, but some older / legacy Minecraft Bedrock Edition "
+            "block names may be less specific.",
         )
         self._set_tooltip(
             self.fast_direct_clear,
@@ -3795,7 +3800,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         )
         self._set_tooltip(
             self.include_item_frame_audit,
-            "Adds detailed item-frame label diagnostics to the export report, including internal item keys, final Bedrock item names, damage values, storage coordinates, frame coordinates and Block-tag usage. Leave this disabled during normal use.",
+            "Adds detailed item-frame label diagnostics to the export report, "
+            "including internal item keys, final Minecraft Bedrock Edition item "
+            "names, damage values, storage coordinates, frame coordinates and "
+            "Block-tag usage. Leave this disabled during normal use.",
         )
         self._set_tooltip(
             self.include_display_name_audit,
@@ -3819,7 +3827,11 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         )
         self._set_tooltip(
             self.alphabetical_order,
-            "Sorts block types by their Bedrock Edition display names before packing them into storage. Verified language names are used when available, with tested overrides and internal-name fallbacks for unresolved or ambiguous items. Turning this off keeps first-seen scan order.",
+            "Sorts block types by their Minecraft Bedrock Edition display names "
+            "before packing them into storage. Verified language names are used "
+            "when available, with tested overrides and internal-name fallbacks "
+            "for unresolved or ambiguous items. Turning this off keeps first-seen "
+            "scan order.",
         )
         self._set_tooltip(
             self.use_double_chests,
@@ -4030,7 +4042,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         """
         Returns whether a fast-scan name should be re-read through Amulet.
 
-        Imported Java structures, universal blocks and legacy Bedrock palettes
+        Imported Java structures, universal blocks and legacy Minecraft Bedrock Edition palettes
         can expose generic placed-block names even when Amulet can translate the
         block more precisely. This helper keeps those checks in one place.
         """
@@ -4388,10 +4400,16 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         records an identical Amulet translation as a recovery, and retains a
         concrete Amulet result when it already agrees with the raw material.
         """
-        external_sources_enabled = (
-            self.use_found_entries_cache.GetValue()
-            or self.use_installed_language_data.GetValue()
+        external_sources_enabled = getattr(
+            self,
+            "_operation_external_scan_identity_enabled",
+            None,
         )
+        if external_sources_enabled is None:
+            external_sources_enabled = (
+                self.use_found_entries_cache.GetValue()
+                or self.use_installed_language_data.GetValue()
+            )
         if external_sources_enabled:
             self._ensure_external_language_data_loaded()
 
@@ -4683,7 +4701,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     def _browse_for_language_file(self, _) -> None:
         """
-        Lets the user select a Bedrock Edition en_US.lang file.
+        Lets the user select a Minecraft Bedrock Edition en_US.lang file.
         """
         current_value = self.language_file_path.GetValue().strip()
         default_directory = ""
@@ -4957,10 +4975,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         """
         seconds = float(seconds)
         if seconds <= 0:
-            return f"{amount:,} {label}/second"
+            return f"{amount:,} {label} / second"
 
         rate = amount / seconds
-        return f"{rate:,.2f} {label}/second"
+        return f"{rate:,.2f} {label} / second"
 
     def _get_skipped_block_reason(self, item_name: str) -> str:
         """
@@ -5454,7 +5472,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     def _is_truthy_state_value(self, value) -> bool:
         """
-        Interprets common Bedrock boolean / upper-half state values.
+        Interprets common Minecraft Bedrock Edition boolean / upper-half state values.
         """
         value = self._tag_to_python_value(value)
 
@@ -5555,7 +5573,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     def _get_bed_color_name(self, block, block_entity) -> Optional[str]:
         """
-        Reads a Bedrock bed color and converts it into a colored bed item name.
+        Reads a Minecraft Bedrock Edition bed color and converts it into a colored bed item name.
         """
         color = self._get_block_entity_nbt_value(block_entity, "color")
 
@@ -5587,7 +5605,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     def _get_block_color_name(self, block, block_entity=None) -> Optional[str]:
         """
-        Reads a common Bedrock color state and converts it into a color name.
+        Reads a common Minecraft Bedrock Edition color state and converts it into a color name.
         """
         color = self._get_block_entity_nbt_value(block_entity, "color")
 
@@ -5631,7 +5649,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         block_entity=None,
     ) -> Optional[str]:
         """
-        Converts a generic color-state block into its color-specific Bedrock item name.
+        Converts a generic color-state block into its color-specific Minecraft Bedrock Edition item name.
         """
         color_name = self._get_block_color_name(block, block_entity)
 
@@ -5725,7 +5743,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     def _get_coral_block_item_name(self, block, key: str) -> Optional[str]:
         """
-        Converts generic coral block data into the matching live or dead Bedrock item name.
+        Converts generic coral block data into the matching live or dead Minecraft Bedrock Edition item name.
         """
         coral_type, is_dead = self._get_coral_type_and_dead_state(
             block,
@@ -5802,9 +5820,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     def _get_candle_export_amount(self, block, item_name: str) -> int:
         """
-        Reads the Bedrock candle count state and converts it into an item amount.
+        Reads the Minecraft Bedrock Edition candle count state and converts it into an item amount.
 
-        Bedrock stores placed candle groups as one candle block with a candles
+        Minecraft Bedrock Edition stores placed candle groups as one candle block with a candles
         state value from 0 to 3, which represents 1 to 4 candle items.
         """
         item_name = self.ITEM_NAME_OVERRIDES.get(str(item_name), str(item_name))
@@ -5913,7 +5931,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         )
         sign_type = self._normalize_state_text(sign_type)
 
-        # Imported Java / universal structures and older Bedrock palettes may
+        # Imported Java / universal structures and older Minecraft Bedrock Edition palettes may
         # expose compact wood-family spellings. Normalize only verified aliases
         # before resolving the inventory sign item.
         sign_type_aliases = {
@@ -6034,7 +6052,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         """
         Converts placed item frame blocks into the correct frame item.
 
-        Bedrock can expose item frames as minecraft:frame, minecraft:glow_frame,
+        Minecraft Bedrock Edition can expose item frames as minecraft:frame, minecraft:glow_frame,
         or as a universal item_frame_block with a glowing state. The exporter
         stores them as the matching inventory item instead of skipping them.
         """
@@ -6055,7 +6073,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         """
         Converts placed banners into color- and type-preserving item keys.
 
-        Bedrock uses the banner item Type tag to distinguish special banners,
+        Minecraft Bedrock Edition uses the banner item Type tag to distinguish special banners,
         including the Ominous Banner, from an ordinary banner with the same
         white base color. The type suffix keeps those groups separate.
         """
@@ -6096,7 +6114,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     def _get_banner_item_parts(self, item_name: str) -> Tuple[int, int]:
         """
-        Returns the banner damage value and Bedrock banner Type tag.
+        Returns the banner damage value and Minecraft Bedrock Edition banner Type tag.
         """
         value = str(item_name)
         if not value.startswith(self.BANNER_ITEM_PREFIX):
@@ -6140,7 +6158,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     def _get_item_nbt_name_damage(self, item_name: str) -> Tuple[str, int]:
         """
-        Converts display item names into the Bedrock inventory name and damage value.
+        Converts display item names into the Minecraft Bedrock Edition inventory name and damage value.
         """
         item_name = self.ITEM_NAME_OVERRIDES.get(str(item_name), str(item_name))
 
@@ -6188,14 +6206,15 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         Decides whether the item frame item should include a Block tag.
 
         Some items are valid inventory items but should not be written as block
-        display data in Bedrock item frame NBT.
+        display data in Minecraft Bedrock Edition item frame NBT.
         """
         actual_name, _damage = self._get_item_nbt_name_damage(item_name)
         return actual_name not in self.ITEM_FRAME_NO_BLOCK_TAG_ITEMS
 
     def _get_sapling_item_name(self, block) -> Optional[str]:
         """
-        Resolves the legacy Bedrock sapling block state to a specific item.
+        Resolves the legacy Minecraft Bedrock Edition sapling block state to
+        a specific item.
         """
         sapling_type = self._get_block_property(
             block,
@@ -6217,11 +6236,23 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return self.SAPLING_ITEM_BY_TYPE.get(normalized_type)
 
-    def _classify_block(self, block, block_entity=None) -> Tuple[Optional[str], Optional[str]]:
+    def _classify_block(
+        self,
+        block,
+        block_entity=None,
+        source_key: Optional[str] = None,
+    ) -> Tuple[Optional[str], Optional[str]]:
         """
         Decides whether a block should be exported, skipped or treated as air.
+
+        ``source_key`` may be supplied by the direct scan path so the same
+        block identifier is not normalized twice for every selected position.
         """
-        key = self._get_namespaced_block_name(block)
+        key = (
+            source_key
+            if source_key is not None
+            else self._get_namespaced_block_name(block)
+        )
         source_key = key
 
         if key is None:
@@ -6365,25 +6396,58 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         if key == "minecraft:pitcher_crop":
             key = self._get_pitcher_crop_item_name(block)
 
-        conversion_entry_item = self._resolve_conversion_entry_item(source_key, key)
-        if conversion_entry_item:
-            key = conversion_entry_item
+        conversion_entry_item = None
+        conversion_entries = getattr(self, "_conversion_entries", None)
+        if (
+            source_key == key
+            and conversion_entries
+            and source_key in conversion_entries
+        ):
+            # Conversion Entries are indexed by their already validated source
+            # identifier. Most selected blocks will not match an external rule,
+            # so reject them with one dictionary membership check before calling
+            # the full resolver.
+            conversion_entry_item = self._resolve_conversion_entry_item(
+                source_key,
+                key,
+            )
+            if conversion_entry_item:
+                key = conversion_entry_item
 
-        reviewed_normalization_item = self._resolve_reviewed_amulet_normalization(
-            block,
-            source_key,
-            key,
+        reviewed_normalization_item = None
+        reviewed_enabled = getattr(
+            self,
+            "_operation_use_reviewed_amulet_normalization",
+            None,
         )
-        if reviewed_normalization_item:
-            key = reviewed_normalization_item
+        if (
+            source_key == key
+            and source_key in self.REVIEWED_AMULET_NORMALIZATIONS
+            and reviewed_enabled is not False
+        ):
+            reviewed_normalization_item = (
+                self._resolve_reviewed_amulet_normalization(
+                    block,
+                    source_key,
+                    key,
+                )
+            )
+            if reviewed_normalization_item:
+                key = reviewed_normalization_item
 
-        self._record_amulet_conversion_comparison(
-            block,
-            source_key,
-            key,
-            conversion_entry_item,
-            reviewed_normalization_item,
+        conversion_tracking_enabled = getattr(
+            self,
+            "_operation_conversion_tracking_enabled",
+            None,
         )
+        if conversion_tracking_enabled is not False:
+            self._record_amulet_conversion_comparison(
+                block,
+                source_key,
+                key,
+                conversion_entry_item,
+                reviewed_normalization_item,
+            )
 
         if key == "minecraft:bedrock":
             return None, key
@@ -6420,14 +6484,29 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return True
 
-    def _get_extra_export_items_for_block(self, block) -> List[Tuple[str, int]]:
+    def _get_extra_export_items_for_block(
+        self,
+        block,
+        block_key: Optional[str] = None,
+    ) -> List[Tuple[str, int]]:
         """
         Returns extra item drops for special blocks that become multiple items.
         """
-        if self.include_unusual.GetValue():
+        include_unusual = getattr(
+            self,
+            "_operation_include_unusual",
+            None,
+        )
+        if include_unusual is None:
+            include_unusual = bool(self.include_unusual.GetValue())
+        if include_unusual:
             return []
 
-        key = self._get_namespaced_block_name(block)
+        key = (
+            block_key
+            if block_key is not None
+            else self._get_namespaced_block_name(block)
+        )
 
         if key is None:
             return []
@@ -6470,10 +6549,21 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         operation never loses one of the two slab items when unusual blocks are
         disabled.
         """
-        if self.include_unusual.GetValue():
+        raw_scan_key_text = str(raw_scan_key or "")
+        if "slab" not in raw_scan_key_text:
             return 1
 
-        if not self._is_double_slab_state(raw_block, raw_scan_key):
+        include_unusual = getattr(
+            self,
+            "_operation_include_unusual",
+            None,
+        )
+        if include_unusual is None:
+            include_unusual = bool(self.include_unusual.GetValue())
+        if include_unusual:
+            return 1
+
+        if not self._is_double_slab_state(raw_block, raw_scan_key_text):
             return 1
 
         normalized_export_key = self._normalize_conversion_identifier(
@@ -6494,10 +6584,19 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         """
         Adds an exported item count and preserves first-seen scan order.
         """
-        item_name = self.ITEM_NAME_OVERRIDES.get(str(item_name), str(item_name))
+        item_name = str(item_name)
+        item_name = self.ITEM_NAME_OVERRIDES.get(item_name, item_name)
         amount = int(amount)
 
-        if not self.include_unusual.GetValue():
+        include_unusual = getattr(
+            self,
+            "_operation_include_unusual",
+            None,
+        )
+        if include_unusual is None:
+            include_unusual = bool(self.include_unusual.GetValue())
+
+        if not include_unusual and "slab" in item_name:
             slab_item = self._get_double_slab_export_item(item_name)
             if slab_item:
                 item_name = slab_item
@@ -6578,7 +6677,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         """
         Builds the inventory NBT payload for one storage container.
 
-        For double chests, pairlead is set so Bedrock has a stable lead half.
+        For double chests, pairlead is set so Minecraft Bedrock Edition has
+        a stable lead half.
         """
         if NBTFile is None:
             raise RuntimeError("amulet_nbt is unavailable in this environment.")
@@ -6689,7 +6789,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._conversion_entries_loaded_count = 0
         self._conversion_entries_prepared = False
         self._pending_conversion_candidates = collections.defaultdict(int)
-        self._conversion_candidates_written_count = 0
         self._conversion_candidates_new_record_count = 0
         self._conversion_candidates_updated_record_count = 0
         self._conversion_candidate_observations_added_count = 0
@@ -6800,11 +6899,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         Clears all in-memory external and cached display-name state.
         """
         self._external_language_aliases = {}
-        self._external_language_raw_entries = {}
         self._found_entries_aliases = {}
         self._found_entries_raw_entries = {}
         self._external_language_loaded_path = ""
-        self._external_language_loaded_mtime = None
         self._external_language_load_error = ""
         self._external_language_loaded_count = 0
         self._external_language_used = {}
@@ -7021,8 +7118,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 header, _ = section
                 header.SetValue(expanded)
 
-            self._settings_config_unknown_data = dict(data)
-
             self._on_storage_choice_changed(None)
             self._on_separate_types_changed(None)
             self._on_nested_shulker_storage_changed(None)
@@ -7102,7 +7197,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 content,
                 replace_existing=True,
             )
-            self._settings_config_unknown_data = merged
             self._settings_config_load_error = ""
             self._settings_config_write_error = ""
             return True
@@ -7490,7 +7584,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         self._settings_config_load_error = ""
         self._settings_config_write_error = ""
-        self._settings_config_unknown_data = merged
         self._apply_settings_config_data(merged)
 
         wx.MessageBox(
@@ -7545,7 +7638,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 content,
                 replace_existing=True,
             )
-            self._settings_config_unknown_data = merged
             self._settings_config_load_error = ""
             self._settings_config_write_error = ""
         except Exception as exc:
@@ -7907,6 +7999,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             )
 
             def update_description(_event=None) -> None:
+                """Updates the selected action description and Open button state."""
                 selection = action_list.GetSelection()
                 if selection == wx.NOT_FOUND:
                     description_label.SetLabel(
@@ -8393,7 +8486,16 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         may explicitly bypass that omission because it identifies a new,
         state-specific item that still needs review before built-in adoption.
         """
-        if not self.record_conversion_candidates.GetValue():
+        candidate_recording = getattr(
+            self,
+            "_operation_record_conversion_candidates",
+            None,
+        )
+        if candidate_recording is None:
+            candidate_recording = bool(
+                self.record_conversion_candidates.GetValue()
+            )
+        if not candidate_recording:
             return
 
         source_key = self._normalize_conversion_identifier(source_key)
@@ -8439,7 +8541,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         are read only to merge observation totals; candidate data never becomes
         active conversion authority.
         """
-        self._conversion_candidates_written_count = 0
         self._conversion_candidates_new_record_count = 0
         self._conversion_candidates_updated_record_count = 0
         self._conversion_candidate_observations_added_count = 0
@@ -8596,9 +8697,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 temporary_path = Path(handle.name)
 
             os.replace(str(temporary_path), str(destination))
-            self._conversion_candidates_written_count = len(
-                self._pending_conversion_candidates
-            )
             self._conversion_candidates_total_record_count = len(existing)
             self._conversion_candidates_write_error = ""
         except Exception as exc:
@@ -8778,13 +8876,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         """
         if source_key is None or current_key is None:
             return None
-        if not self.use_conversion_entries.GetValue():
-            return None
-
-        source_key = self._normalize_conversion_identifier(source_key)
-        current_key = self._normalize_conversion_identifier(current_key)
-        if source_key is None or current_key is None:
-            return None
 
         # Built-in conversions and verified overrides keep priority. External
         # entries only fill unresolved same-name cases, never replace a result
@@ -8792,10 +8883,25 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         if source_key != current_key:
             return None
 
-        if not self._is_safe_conversion_source_key(source_key):
+        use_conversion_entries = getattr(
+            self,
+            "_operation_use_conversion_entries",
+            None,
+        )
+        if use_conversion_entries is None:
+            use_conversion_entries = bool(
+                self.use_conversion_entries.GetValue()
+            )
+        if not use_conversion_entries:
             return None
 
-        self._ensure_conversion_entries_loaded()
+        # The operation prepares and validates the rule table once before
+        # scanning. Runtime block identifiers are already canonical namespaced
+        # keys, so use the indexed table directly instead of repeating regex
+        # normalization and source-safety checks for every selected block.
+        if not self._conversion_entries_prepared:
+            self._ensure_conversion_entries_loaded()
+
         item_key = self._conversion_entries.get(source_key)
         if item_key is None:
             return None
@@ -8938,6 +9044,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             ("get_version_container", ((self._world_platform, self._world_version),)),
         )
 
+        last_error = "not available"
         for method_name, args in lookup_attempts:
             ok, method_obj, _error_name = self._diagnostic_get_attribute(
                 manager_obj,
@@ -8955,7 +9062,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             except Exception as exc:
                 last_error = type(exc).__name__
 
-        return False, None, manager_label, locals().get("last_error", "not available")
+        return False, None, manager_label, last_error
 
     def _log_amulet_conversion_capability_diagnostic(self) -> None:
         """
@@ -9079,6 +9186,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         """
         Returns the first usable version object exposed by Amulet.
         """
+        last_error = "not available"
         for manager_label, manager_obj in self._diagnostic_collect_translation_managers():
             ok, version_obj, source_label, error_name = (
                 self._diagnostic_lookup_version_object(manager_label, manager_obj)
@@ -9087,7 +9195,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 return version_obj, source_label, ""
             if error_name:
                 last_error = error_name
-        return None, "", locals().get("last_error", "not available")
+        return None, "", last_error
 
     def _diagnostic_result_identity(self, value) -> str:
         """
@@ -9249,11 +9357,20 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         """
         Applies only reviewed Amulet normalizations to unresolved generic blocks.
         """
-        if not self.use_reviewed_amulet_normalization.GetValue():
-            return None
-
         expected_item = self.REVIEWED_AMULET_NORMALIZATIONS.get(source_key)
         if not expected_item or current_item_key != source_key:
+            return None
+
+        reviewed_enabled = getattr(
+            self,
+            "_operation_use_reviewed_amulet_normalization",
+            None,
+        )
+        if reviewed_enabled is None:
+            reviewed_enabled = bool(
+                self.use_reviewed_amulet_normalization.GetValue()
+            )
+        if not reviewed_enabled:
             return None
 
         # Reviewed Amulet assistance is only allowed to fill an unresolved
@@ -9473,8 +9590,26 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         """
         Retains the most useful bounded report-only conversion comparisons.
         """
-        audit_enabled = self.include_amulet_conversion_audit.GetValue()
-        candidate_recording = self.record_conversion_candidates.GetValue()
+        audit_enabled = getattr(
+            self,
+            "_operation_conversion_audit_enabled",
+            None,
+        )
+        if audit_enabled is None:
+            audit_enabled = bool(
+                self.include_amulet_conversion_audit.GetValue()
+            )
+
+        candidate_recording = getattr(
+            self,
+            "_operation_record_conversion_candidates",
+            None,
+        )
+        if candidate_recording is None:
+            candidate_recording = bool(
+                self.record_conversion_candidates.GetValue()
+            )
+
         if not audit_enabled and not candidate_recording:
             return
 
@@ -10425,9 +10560,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         self._external_language_prepared = True
         self._external_language_aliases = {}
-        self._external_language_raw_entries = {}
         self._external_language_loaded_path = ""
-        self._external_language_loaded_mtime = None
         self._external_language_load_error = ""
         self._external_language_loaded_count = 0
 
@@ -10448,21 +10581,20 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             return bool(self._found_entries_aliases)
 
         try:
-            modified_time = language_path.stat().st_mtime_ns
+            # Live fallback lookups need only the alias map. Found Entries
+            # keeps its own raw-entry map because that file supports merge-safe
+            # updates.
             (
                 self._external_language_aliases,
-                self._external_language_raw_entries,
+                _,
             ) = self._parse_display_name_file(language_path)
             self._external_language_loaded_path = str(language_path)
-            self._external_language_loaded_mtime = modified_time
             self._external_language_loaded_count = len(
                 self._external_language_aliases
             )
         except Exception as exc:
             self._external_language_aliases = {}
-            self._external_language_raw_entries = {}
             self._external_language_loaded_path = ""
-            self._external_language_loaded_mtime = None
             self._external_language_load_error = str(exc)
             self._external_language_loaded_count = 0
 
@@ -10603,13 +10735,12 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             return
 
         try:
-            modified_time = language_path.stat().st_mtime_ns
+            # Refresh only the alias map used by live fallback lookups.
             (
                 self._external_language_aliases,
-                self._external_language_raw_entries,
+                _,
             ) = self._parse_display_name_file(language_path)
             self._external_language_loaded_path = str(language_path)
-            self._external_language_loaded_mtime = modified_time
             self._external_language_loaded_count = len(
                 self._external_language_aliases
             )
@@ -10839,7 +10970,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     def _get_language_display_candidates(self, item_name: str) -> List[str]:
         """
-        Returns conservative Bedrock language aliases for one internal item key.
+        Returns conservative Minecraft Bedrock Edition language aliases for
+        one internal item key.
 
         The language file uses several layouts, including tile.carpet.blue.name,
         item.banner.black.name and legacy identifiers. These candidates support
@@ -10855,7 +10987,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             self.ABC_SORT_NAME_OVERRIDES.get(item_name, ""),
         ]
 
-        # Several older Bedrock families, especially wooden and stone slabs,
+        # Several older Minecraft Bedrock Edition families, especially wooden
+        # and stone slabs,
         # are stored in en_US.lang under grouped keys such as
         # ``tile.wooden_slab.oak.name``. Add only reviewed aliases for the
         # matching item so a missing direct alias can still resolve safely.
@@ -11212,7 +11345,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         Priority:
         1. Tested banner color handling.
-        2. Verified Bedrock English display name.
+        2. Verified Minecraft Bedrock Edition English display name.
         3. Existing tested ABC override.
         4. Humanized internal item name.
 
@@ -11296,7 +11429,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     def _get_nested_shulker_item_name(self) -> str:
         """
-        Returns the Bedrock item name for generated nested shulker boxes.
+        Returns the Minecraft Bedrock Edition item name for generated nested
+        shulker boxes.
         """
         color = "default"
 
@@ -11639,7 +11773,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     def _make_scan_air(self) -> Block:
         """
-        Builds a Bedrock air block for positions inside absent world chunks.
+        Builds a Minecraft Bedrock Edition air block for positions inside absent world chunks.
         """
         return Block("minecraft", "air")
 
@@ -11833,24 +11967,55 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             block = self._get_block_for_scan(x, y, z, chunk_cache)
             scan_block = block
             raw_scan_key = self._get_namespaced_block_name(block)
-            export_key, skipped_key = self._classify_block(block)
+            scan_block_key = raw_scan_key
+            export_key, skipped_key = self._classify_block(
+                block,
+                source_key=raw_scan_key,
+            )
 
-            raw_scan_needs_safe_lookup = self._needs_safe_block_lookup(raw_scan_key)
+            raw_scan_needs_safe_lookup = self._needs_safe_block_lookup(
+                raw_scan_key
+            )
             ambiguous_lookup_needed = (
                 export_key in self.AMBIGUOUS_FAST_SCAN_BLOCKS
                 or raw_scan_key in self.AMBIGUOUS_FAST_SCAN_BLOCKS
             )
+
+            # Most direct-scan blocks keep the same source and export identity.
+            # Reuse the first lookup result instead of repeating the complete
+            # state-sensitive suffix test for the same string.
+            export_needs_safe_lookup = (
+                raw_scan_needs_safe_lookup
+                if export_key == raw_scan_key
+                else self._needs_safe_block_lookup(export_key)
+            )
+            skipped_needs_safe_lookup = (
+                False
+                if skipped_key is None
+                else (
+                    raw_scan_needs_safe_lookup
+                    if skipped_key == raw_scan_key
+                    else self._needs_safe_block_lookup(skipped_key)
+                )
+            )
             needs_safe_lookup = (
                 raw_scan_needs_safe_lookup
                 or ambiguous_lookup_needed
-                or self._needs_safe_block_lookup(export_key)
-                or self._needs_safe_block_lookup(skipped_key)
+                or export_needs_safe_lookup
+                or skipped_needs_safe_lookup
             )
 
             if needs_safe_lookup:
                 try:
-                    safe_block, safe_block_entity = self._get_block_and_entity_safe_for_scan(x, y, z)
-                    safe_export_key, safe_skipped_key = self._classify_block(safe_block, safe_block_entity)
+                    safe_block, safe_block_entity = (
+                        self._get_block_and_entity_safe_for_scan(x, y, z)
+                    )
+                    safe_scan_key = self._get_namespaced_block_name(safe_block)
+                    safe_export_key, safe_skipped_key = self._classify_block(
+                        safe_block,
+                        safe_block_entity,
+                        source_key=safe_scan_key,
+                    )
                     (
                         recovered_item_key,
                         recovery_source,
@@ -11891,6 +12056,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                             self._ambiguous_fast_scan_fallbacks += 1
                     elif safe_export_key is not None or safe_skipped_key is not None:
                         scan_block = safe_block
+                        scan_block_key = safe_scan_key
                         export_key = safe_export_key
                         skipped_key = safe_skipped_key
                         if ambiguous_lookup_needed:
@@ -11905,9 +12071,20 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 skipped_key = export_key
                 export_key = None
 
-            extra_export_items = self._get_extra_export_items_for_block(scan_block)
+            extra_export_items = []
+            if (
+                scan_block_key == "minecraft:candle_cake"
+                or str(scan_block_key or "").endswith("_candle_cake")
+            ):
+                extra_export_items = self._get_extra_export_items_for_block(
+                    scan_block,
+                    scan_block_key,
+                )
 
-            if skipped_key == "minecraft:bedrock" and self.preserve_bedrock.GetValue():
+            if (
+                skipped_key == "minecraft:bedrock"
+                and self._operation_preserve_bedrock
+            ):
                 protected_positions.add((x, y, z))
 
             if skipped_key is not None:
@@ -11922,17 +12099,24 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
             if export_key is not None:
                 exportable_source_blocks += 1
-                export_amount = self._get_candle_export_amount(scan_block, export_key)
-                export_amount *= self._get_raw_double_slab_export_multiplier(
-                    block,
-                    raw_scan_key,
-                    export_key,
+                export_amount = (
+                    self._get_candle_export_amount(scan_block, export_key)
+                    if export_key in self.CANDLE_ITEM_BLOCKS
+                    else 1
                 )
+                if "slab" in str(raw_scan_key or ""):
+                    export_amount *= (
+                        self._get_raw_double_slab_export_multiplier(
+                            block,
+                            raw_scan_key,
+                            export_key,
+                        )
+                    )
                 self._record_export_count(counts, export_key, export_amount)
 
                 if (
                     export_key in self.GENERIC_UNSAFE_ITEM_BLOCKS
-                    and self.attempt_unresolved_item_writes.GetValue()
+                    and self._operation_attempt_unresolved_item_writes
                 ):
                     self._unresolved_write_attempt_counts[export_key] += export_amount
 
@@ -12802,7 +12986,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         Returns placed and skipped totals, skipped label details grouped by
         reason, and a successful label audit. The audit records the internal
-        group key, final Bedrock item name, damage value, storage position,
+        group key, final Minecraft Bedrock Edition item name, damage value,
+        storage position,
         frame position and whether a Block tag was written.
         """
         if not self.separate_types.GetValue():
@@ -12968,9 +13153,40 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._reset_conversion_operation_state()
         self._reset_amulet_translator_capability_state()
 
-        if (
+        # Capture hot-path options once. Reading wx controls and checking files
+        # for every selected block is unnecessary because operation settings do
+        # not change while the Amulet worker is running.
+        self._operation_include_unusual = bool(
+            self.include_unusual.GetValue()
+        )
+        self._operation_use_conversion_entries = bool(
+            self.use_conversion_entries.GetValue()
+        )
+        self._operation_use_reviewed_amulet_normalization = bool(
+            self.use_reviewed_amulet_normalization.GetValue()
+        )
+        self._operation_conversion_audit_enabled = bool(
+            self.include_amulet_conversion_audit.GetValue()
+        )
+        self._operation_record_conversion_candidates = bool(
+            self.record_conversion_candidates.GetValue()
+        )
+        self._operation_conversion_tracking_enabled = (
+            self._operation_conversion_audit_enabled
+            or self._operation_record_conversion_candidates
+        )
+        self._operation_external_scan_identity_enabled = bool(
             self.use_found_entries_cache.GetValue()
             or self.use_installed_language_data.GetValue()
+        )
+        self._operation_attempt_unresolved_item_writes = bool(
+            self.attempt_unresolved_item_writes.GetValue()
+        )
+        self._operation_preserve_bedrock = bool(
+            self.preserve_bedrock.GetValue()
+        )
+        if (
+            self._operation_external_scan_identity_enabled
             or self.save_found_language_entries.GetValue()
         ):
             self._ensure_external_language_data_loaded()
@@ -12984,7 +13200,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             self._queue_missing_installed_language_entries()
             self._write_pending_found_entries()
 
-        if self.use_conversion_entries.GetValue():
+        # Parse and validate external conversion rules once before scanning
+        # so the hot path can use direct dictionary membership checks.
+        if self._operation_use_conversion_entries:
             self._ensure_conversion_entries_loaded()
 
         try:

@@ -19,10 +19,9 @@ from amulet.api.block import Block
 from amulet.api.block_entity import BlockEntity
 
 try:
-    from amulet.api.item import Item, BlockItem
+    from amulet.api.item import Item
 except Exception:
     Item = None
-    BlockItem = None
 
 try:
     from amulet_nbt import (
@@ -2990,11 +2989,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._unresolved_write_attempt_counts = collections.defaultdict(int)
 
         self._external_language_aliases: Dict[str, Tuple[str, str]] = {}
-        self._external_language_raw_entries: Dict[str, str] = {}
         self._found_entries_aliases: Dict[str, Tuple[str, str]] = {}
         self._found_entries_raw_entries: Dict[str, str] = {}
         self._external_language_loaded_path = ""
-        self._external_language_loaded_mtime = None
         self._external_language_load_error = ""
         self._external_language_loaded_count = 0
         self._external_language_used: Dict[str, Tuple[str, str, str]] = {}
@@ -3019,7 +3016,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._conversion_entries_loaded_count = 0
         self._conversion_entries_prepared = False
         self._pending_conversion_candidates = collections.defaultdict(int)
-        self._conversion_candidates_written_count = 0
         self._conversion_candidates_new_record_count = 0
         self._conversion_candidates_updated_record_count = 0
         self._conversion_candidate_observations_added_count = 0
@@ -3031,7 +3027,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._settings_config_applying = False
         self._settings_config_load_error = ""
         self._settings_config_write_error = ""
-        self._settings_config_unknown_data = {}
         self._settings_defaults = {}
 
         self._amulet_translator_capabilities: Dict[str, Tuple[bool, str]] = {}
@@ -3607,7 +3602,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         )
         self._set_tooltip(
             self.fast_direct_scan,
-            "Scans blocks directly from chunk data instead of calling get_version_block for every selected block. This is much faster on large selections, but some older / legacy block names may be less specific.",
+            "Scans blocks directly from chunk data instead of calling "
+            "get_version_block for every selected block. This is much faster on "
+            "large selections, but some older / legacy Minecraft Bedrock Edition "
+            "block names may be less specific.",
         )
         self._set_tooltip(
             self.fast_direct_clear,
@@ -3669,7 +3667,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         )
         self._set_tooltip(
             self.include_item_frame_audit,
-            "Adds detailed item-frame label diagnostics to the export report, including internal item keys, final Bedrock item names, damage values, storage coordinates, frame coordinates and Block-tag usage. Leave this disabled during normal use.",
+            "Adds detailed item-frame label diagnostics to the export report, "
+            "including internal item keys, final Minecraft Bedrock Edition item "
+            "names, damage values, storage coordinates, frame coordinates and "
+            "Block-tag usage. Leave this disabled during normal use.",
         )
         self._set_tooltip(
             self.include_display_name_audit,
@@ -3693,7 +3694,11 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         )
         self._set_tooltip(
             self.alphabetical_order,
-            "Sorts block types by their Bedrock Edition display names before packing them into storage. Verified language names are used when available, with tested overrides and internal-name fallbacks for unresolved or ambiguous items. Turning this off keeps first-seen scan order.",
+            "Sorts block types by their Minecraft Bedrock Edition display names "
+            "before packing them into storage. Verified language names are used "
+            "when available, with tested overrides and internal-name fallbacks "
+            "for unresolved or ambiguous items. Turning this off keeps first-seen "
+            "scan order.",
         )
         self._set_tooltip(
             self.use_double_chests,
@@ -4147,10 +4152,16 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         raw_scan_key: Optional[str],
         safe_item_key: Optional[str],
     ) -> Tuple[Optional[str], str]:
-        external_sources_enabled = (
-            self.use_found_entries_cache.GetValue()
-            or self.use_installed_language_data.GetValue()
+        external_sources_enabled = getattr(
+            self,
+            "_operation_external_scan_identity_enabled",
+            None,
         )
+        if external_sources_enabled is None:
+            external_sources_enabled = (
+                self.use_found_entries_cache.GetValue()
+                or self.use_installed_language_data.GetValue()
+            )
         if external_sources_enabled:
             self._ensure_external_language_data_loaded()
 
@@ -4645,10 +4656,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     def _format_rate(self, amount: int, seconds: float, label: str) -> str:
         seconds = float(seconds)
         if seconds <= 0:
-            return f"{amount:,} {label}/second"
+            return f"{amount:,} {label} / second"
 
         rate = amount / seconds
-        return f"{rate:,.2f} {label}/second"
+        return f"{rate:,.2f} {label} / second"
 
     def _get_skipped_block_reason(self, item_name: str) -> str:
         item_name = self.ITEM_NAME_OVERRIDES.get(str(item_name), str(item_name))
@@ -5690,8 +5701,17 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return self.SAPLING_ITEM_BY_TYPE.get(normalized_type)
 
-    def _classify_block(self, block, block_entity=None) -> Tuple[Optional[str], Optional[str]]:
-        key = self._get_namespaced_block_name(block)
+    def _classify_block(
+        self,
+        block,
+        block_entity=None,
+        source_key: Optional[str] = None,
+    ) -> Tuple[Optional[str], Optional[str]]:
+        key = (
+            source_key
+            if source_key is not None
+            else self._get_namespaced_block_name(block)
+        )
         source_key = key
 
         if key is None:
@@ -5835,25 +5855,55 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         if key == "minecraft:pitcher_crop":
             key = self._get_pitcher_crop_item_name(block)
 
-        conversion_entry_item = self._resolve_conversion_entry_item(source_key, key)
-        if conversion_entry_item:
-            key = conversion_entry_item
+        conversion_entry_item = None
+        conversion_entries = getattr(self, "_conversion_entries", None)
+        if (
+            source_key == key
+            and conversion_entries
+            and source_key in conversion_entries
+        ):
 
-        reviewed_normalization_item = self._resolve_reviewed_amulet_normalization(
-            block,
-            source_key,
-            key,
-        )
-        if reviewed_normalization_item:
-            key = reviewed_normalization_item
+            conversion_entry_item = self._resolve_conversion_entry_item(
+                source_key,
+                key,
+            )
+            if conversion_entry_item:
+                key = conversion_entry_item
 
-        self._record_amulet_conversion_comparison(
-            block,
-            source_key,
-            key,
-            conversion_entry_item,
-            reviewed_normalization_item,
+        reviewed_normalization_item = None
+        reviewed_enabled = getattr(
+            self,
+            "_operation_use_reviewed_amulet_normalization",
+            None,
         )
+        if (
+            source_key == key
+            and source_key in self.REVIEWED_AMULET_NORMALIZATIONS
+            and reviewed_enabled is not False
+        ):
+            reviewed_normalization_item = (
+                self._resolve_reviewed_amulet_normalization(
+                    block,
+                    source_key,
+                    key,
+                )
+            )
+            if reviewed_normalization_item:
+                key = reviewed_normalization_item
+
+        conversion_tracking_enabled = getattr(
+            self,
+            "_operation_conversion_tracking_enabled",
+            None,
+        )
+        if conversion_tracking_enabled is not False:
+            self._record_amulet_conversion_comparison(
+                block,
+                source_key,
+                key,
+                conversion_entry_item,
+                reviewed_normalization_item,
+            )
 
         if key == "minecraft:bedrock":
             return None, key
@@ -5887,11 +5937,26 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         return True
 
-    def _get_extra_export_items_for_block(self, block) -> List[Tuple[str, int]]:
-        if self.include_unusual.GetValue():
+    def _get_extra_export_items_for_block(
+        self,
+        block,
+        block_key: Optional[str] = None,
+    ) -> List[Tuple[str, int]]:
+        include_unusual = getattr(
+            self,
+            "_operation_include_unusual",
+            None,
+        )
+        if include_unusual is None:
+            include_unusual = bool(self.include_unusual.GetValue())
+        if include_unusual:
             return []
 
-        key = self._get_namespaced_block_name(block)
+        key = (
+            block_key
+            if block_key is not None
+            else self._get_namespaced_block_name(block)
+        )
 
         if key is None:
             return []
@@ -5922,10 +5987,21 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         raw_scan_key: Optional[str],
         export_key: Optional[str],
     ) -> int:
-        if self.include_unusual.GetValue():
+        raw_scan_key_text = str(raw_scan_key or "")
+        if "slab" not in raw_scan_key_text:
             return 1
 
-        if not self._is_double_slab_state(raw_block, raw_scan_key):
+        include_unusual = getattr(
+            self,
+            "_operation_include_unusual",
+            None,
+        )
+        if include_unusual is None:
+            include_unusual = bool(self.include_unusual.GetValue())
+        if include_unusual:
+            return 1
+
+        if not self._is_double_slab_state(raw_block, raw_scan_key_text):
             return 1
 
         normalized_export_key = self._normalize_conversion_identifier(
@@ -5943,10 +6019,19 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         return 1
 
     def _record_export_count(self, counts: Dict[str, int], item_name: str, amount: int = 1) -> None:
-        item_name = self.ITEM_NAME_OVERRIDES.get(str(item_name), str(item_name))
+        item_name = str(item_name)
+        item_name = self.ITEM_NAME_OVERRIDES.get(item_name, item_name)
         amount = int(amount)
 
-        if not self.include_unusual.GetValue():
+        include_unusual = getattr(
+            self,
+            "_operation_include_unusual",
+            None,
+        )
+        if include_unusual is None:
+            include_unusual = bool(self.include_unusual.GetValue())
+
+        if not include_unusual and "slab" in item_name:
             slab_item = self._get_double_slab_export_item(item_name)
             if slab_item:
                 item_name = slab_item
@@ -6095,7 +6180,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._conversion_entries_loaded_count = 0
         self._conversion_entries_prepared = False
         self._pending_conversion_candidates = collections.defaultdict(int)
-        self._conversion_candidates_written_count = 0
         self._conversion_candidates_new_record_count = 0
         self._conversion_candidates_updated_record_count = 0
         self._conversion_candidate_observations_added_count = 0
@@ -6182,11 +6266,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     def _clear_loaded_display_name_data(self) -> None:
         self._external_language_aliases = {}
-        self._external_language_raw_entries = {}
         self._found_entries_aliases = {}
         self._found_entries_raw_entries = {}
         self._external_language_loaded_path = ""
-        self._external_language_loaded_mtime = None
         self._external_language_load_error = ""
         self._external_language_loaded_count = 0
         self._external_language_used = {}
@@ -6373,8 +6455,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 header, _ = section
                 header.SetValue(expanded)
 
-            self._settings_config_unknown_data = dict(data)
-
             self._on_storage_choice_changed(None)
             self._on_separate_types_changed(None)
             self._on_nested_shulker_storage_changed(None)
@@ -6448,7 +6528,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 content,
                 replace_existing=True,
             )
-            self._settings_config_unknown_data = merged
             self._settings_config_load_error = ""
             self._settings_config_write_error = ""
             return True
@@ -6788,7 +6867,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         self._settings_config_load_error = ""
         self._settings_config_write_error = ""
-        self._settings_config_unknown_data = merged
         self._apply_settings_config_data(merged)
 
         wx.MessageBox(
@@ -6840,7 +6918,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 content,
                 replace_existing=True,
             )
-            self._settings_config_unknown_data = merged
             self._settings_config_load_error = ""
             self._settings_config_write_error = ""
         except Exception as exc:
@@ -7601,7 +7678,16 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         target_key: str,
         allow_resolved_family: bool = False,
     ) -> None:
-        if not self.record_conversion_candidates.GetValue():
+        candidate_recording = getattr(
+            self,
+            "_operation_record_conversion_candidates",
+            None,
+        )
+        if candidate_recording is None:
+            candidate_recording = bool(
+                self.record_conversion_candidates.GetValue()
+            )
+        if not candidate_recording:
             return
 
         source_key = self._normalize_conversion_identifier(source_key)
@@ -7637,7 +7723,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         ] += 1
 
     def _write_pending_conversion_candidates(self) -> None:
-        self._conversion_candidates_written_count = 0
         self._conversion_candidates_new_record_count = 0
         self._conversion_candidates_updated_record_count = 0
         self._conversion_candidate_observations_added_count = 0
@@ -7794,9 +7879,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 temporary_path = Path(handle.name)
 
             os.replace(str(temporary_path), str(destination))
-            self._conversion_candidates_written_count = len(
-                self._pending_conversion_candidates
-            )
             self._conversion_candidates_total_record_count = len(existing)
             self._conversion_candidates_write_error = ""
         except Exception as exc:
@@ -7958,21 +8040,25 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     ) -> Optional[str]:
         if source_key is None or current_key is None:
             return None
-        if not self.use_conversion_entries.GetValue():
-            return None
-
-        source_key = self._normalize_conversion_identifier(source_key)
-        current_key = self._normalize_conversion_identifier(current_key)
-        if source_key is None or current_key is None:
-            return None
 
         if source_key != current_key:
             return None
 
-        if not self._is_safe_conversion_source_key(source_key):
+        use_conversion_entries = getattr(
+            self,
+            "_operation_use_conversion_entries",
+            None,
+        )
+        if use_conversion_entries is None:
+            use_conversion_entries = bool(
+                self.use_conversion_entries.GetValue()
+            )
+        if not use_conversion_entries:
             return None
 
-        self._ensure_conversion_entries_loaded()
+        if not self._conversion_entries_prepared:
+            self._ensure_conversion_entries_loaded()
+
         item_key = self._conversion_entries.get(source_key)
         if item_key is None:
             return None
@@ -8091,6 +8177,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             ("get_version_container", ((self._world_platform, self._world_version),)),
         )
 
+        last_error = "not available"
         for method_name, args in lookup_attempts:
             ok, method_obj, _error_name = self._diagnostic_get_attribute(
                 manager_obj,
@@ -8108,7 +8195,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             except Exception as exc:
                 last_error = type(exc).__name__
 
-        return False, None, manager_label, locals().get("last_error", "not available")
+        return False, None, manager_label, last_error
 
     def _log_amulet_conversion_capability_diagnostic(self) -> None:
         self._log("Amulet conversion capability diagnostic:")
@@ -8225,6 +8312,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             )
 
     def _diagnostic_get_version_object(self):
+        last_error = "not available"
         for manager_label, manager_obj in self._diagnostic_collect_translation_managers():
             ok, version_obj, source_label, error_name = (
                 self._diagnostic_lookup_version_object(manager_label, manager_obj)
@@ -8233,7 +8321,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 return version_obj, source_label, ""
             if error_name:
                 last_error = error_name
-        return None, "", locals().get("last_error", "not available")
+        return None, "", last_error
 
     def _diagnostic_result_identity(self, value) -> str:
         if value is None:
@@ -8374,11 +8462,20 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         source_key: str,
         current_item_key: str,
     ) -> Optional[str]:
-        if not self.use_reviewed_amulet_normalization.GetValue():
-            return None
-
         expected_item = self.REVIEWED_AMULET_NORMALIZATIONS.get(source_key)
         if not expected_item or current_item_key != source_key:
+            return None
+
+        reviewed_enabled = getattr(
+            self,
+            "_operation_use_reviewed_amulet_normalization",
+            None,
+        )
+        if reviewed_enabled is None:
+            reviewed_enabled = bool(
+                self.use_reviewed_amulet_normalization.GetValue()
+            )
+        if not reviewed_enabled:
             return None
 
         if source_key not in self.GENERIC_UNSAFE_ITEM_BLOCKS:
@@ -8575,8 +8672,26 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         conversion_entry_item: Optional[str] = None,
         reviewed_normalization_item: Optional[str] = None,
     ) -> None:
-        audit_enabled = self.include_amulet_conversion_audit.GetValue()
-        candidate_recording = self.record_conversion_candidates.GetValue()
+        audit_enabled = getattr(
+            self,
+            "_operation_conversion_audit_enabled",
+            None,
+        )
+        if audit_enabled is None:
+            audit_enabled = bool(
+                self.include_amulet_conversion_audit.GetValue()
+            )
+
+        candidate_recording = getattr(
+            self,
+            "_operation_record_conversion_candidates",
+            None,
+        )
+        if candidate_recording is None:
+            candidate_recording = bool(
+                self.record_conversion_candidates.GetValue()
+            )
+
         if not audit_enabled and not candidate_recording:
             return
 
@@ -9460,9 +9575,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         self._external_language_prepared = True
         self._external_language_aliases = {}
-        self._external_language_raw_entries = {}
         self._external_language_loaded_path = ""
-        self._external_language_loaded_mtime = None
         self._external_language_load_error = ""
         self._external_language_loaded_count = 0
 
@@ -9483,21 +9596,18 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             return bool(self._found_entries_aliases)
 
         try:
-            modified_time = language_path.stat().st_mtime_ns
+
             (
                 self._external_language_aliases,
-                self._external_language_raw_entries,
+                _,
             ) = self._parse_display_name_file(language_path)
             self._external_language_loaded_path = str(language_path)
-            self._external_language_loaded_mtime = modified_time
             self._external_language_loaded_count = len(
                 self._external_language_aliases
             )
         except Exception as exc:
             self._external_language_aliases = {}
-            self._external_language_raw_entries = {}
             self._external_language_loaded_path = ""
-            self._external_language_loaded_mtime = None
             self._external_language_load_error = str(exc)
             self._external_language_loaded_count = 0
 
@@ -9609,13 +9719,12 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             return
 
         try:
-            modified_time = language_path.stat().st_mtime_ns
+
             (
                 self._external_language_aliases,
-                self._external_language_raw_entries,
+                _,
             ) = self._parse_display_name_file(language_path)
             self._external_language_loaded_path = str(language_path)
-            self._external_language_loaded_mtime = modified_time
             self._external_language_loaded_count = len(
                 self._external_language_aliases
             )
@@ -10677,24 +10786,52 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             block = self._get_block_for_scan(x, y, z, chunk_cache)
             scan_block = block
             raw_scan_key = self._get_namespaced_block_name(block)
-            export_key, skipped_key = self._classify_block(block)
+            scan_block_key = raw_scan_key
+            export_key, skipped_key = self._classify_block(
+                block,
+                source_key=raw_scan_key,
+            )
 
-            raw_scan_needs_safe_lookup = self._needs_safe_block_lookup(raw_scan_key)
+            raw_scan_needs_safe_lookup = self._needs_safe_block_lookup(
+                raw_scan_key
+            )
             ambiguous_lookup_needed = (
                 export_key in self.AMBIGUOUS_FAST_SCAN_BLOCKS
                 or raw_scan_key in self.AMBIGUOUS_FAST_SCAN_BLOCKS
             )
+
+            export_needs_safe_lookup = (
+                raw_scan_needs_safe_lookup
+                if export_key == raw_scan_key
+                else self._needs_safe_block_lookup(export_key)
+            )
+            skipped_needs_safe_lookup = (
+                False
+                if skipped_key is None
+                else (
+                    raw_scan_needs_safe_lookup
+                    if skipped_key == raw_scan_key
+                    else self._needs_safe_block_lookup(skipped_key)
+                )
+            )
             needs_safe_lookup = (
                 raw_scan_needs_safe_lookup
                 or ambiguous_lookup_needed
-                or self._needs_safe_block_lookup(export_key)
-                or self._needs_safe_block_lookup(skipped_key)
+                or export_needs_safe_lookup
+                or skipped_needs_safe_lookup
             )
 
             if needs_safe_lookup:
                 try:
-                    safe_block, safe_block_entity = self._get_block_and_entity_safe_for_scan(x, y, z)
-                    safe_export_key, safe_skipped_key = self._classify_block(safe_block, safe_block_entity)
+                    safe_block, safe_block_entity = (
+                        self._get_block_and_entity_safe_for_scan(x, y, z)
+                    )
+                    safe_scan_key = self._get_namespaced_block_name(safe_block)
+                    safe_export_key, safe_skipped_key = self._classify_block(
+                        safe_block,
+                        safe_block_entity,
+                        source_key=safe_scan_key,
+                    )
                     (
                         recovered_item_key,
                         recovery_source,
@@ -10732,6 +10869,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                             self._ambiguous_fast_scan_fallbacks += 1
                     elif safe_export_key is not None or safe_skipped_key is not None:
                         scan_block = safe_block
+                        scan_block_key = safe_scan_key
                         export_key = safe_export_key
                         skipped_key = safe_skipped_key
                         if ambiguous_lookup_needed:
@@ -10746,9 +10884,20 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 skipped_key = export_key
                 export_key = None
 
-            extra_export_items = self._get_extra_export_items_for_block(scan_block)
+            extra_export_items = []
+            if (
+                scan_block_key == "minecraft:candle_cake"
+                or str(scan_block_key or "").endswith("_candle_cake")
+            ):
+                extra_export_items = self._get_extra_export_items_for_block(
+                    scan_block,
+                    scan_block_key,
+                )
 
-            if skipped_key == "minecraft:bedrock" and self.preserve_bedrock.GetValue():
+            if (
+                skipped_key == "minecraft:bedrock"
+                and self._operation_preserve_bedrock
+            ):
                 protected_positions.add((x, y, z))
 
             if skipped_key is not None:
@@ -10763,17 +10912,24 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
             if export_key is not None:
                 exportable_source_blocks += 1
-                export_amount = self._get_candle_export_amount(scan_block, export_key)
-                export_amount *= self._get_raw_double_slab_export_multiplier(
-                    block,
-                    raw_scan_key,
-                    export_key,
+                export_amount = (
+                    self._get_candle_export_amount(scan_block, export_key)
+                    if export_key in self.CANDLE_ITEM_BLOCKS
+                    else 1
                 )
+                if "slab" in str(raw_scan_key or ""):
+                    export_amount *= (
+                        self._get_raw_double_slab_export_multiplier(
+                            block,
+                            raw_scan_key,
+                            export_key,
+                        )
+                    )
                 self._record_export_count(counts, export_key, export_amount)
 
                 if (
                     export_key in self.GENERIC_UNSAFE_ITEM_BLOCKS
-                    and self.attempt_unresolved_item_writes.GetValue()
+                    and self._operation_attempt_unresolved_item_writes
                 ):
                     self._unresolved_write_attempt_counts[export_key] += export_amount
 
@@ -11703,9 +11859,37 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._reset_conversion_operation_state()
         self._reset_amulet_translator_capability_state()
 
-        if (
+        self._operation_include_unusual = bool(
+            self.include_unusual.GetValue()
+        )
+        self._operation_use_conversion_entries = bool(
+            self.use_conversion_entries.GetValue()
+        )
+        self._operation_use_reviewed_amulet_normalization = bool(
+            self.use_reviewed_amulet_normalization.GetValue()
+        )
+        self._operation_conversion_audit_enabled = bool(
+            self.include_amulet_conversion_audit.GetValue()
+        )
+        self._operation_record_conversion_candidates = bool(
+            self.record_conversion_candidates.GetValue()
+        )
+        self._operation_conversion_tracking_enabled = (
+            self._operation_conversion_audit_enabled
+            or self._operation_record_conversion_candidates
+        )
+        self._operation_external_scan_identity_enabled = bool(
             self.use_found_entries_cache.GetValue()
             or self.use_installed_language_data.GetValue()
+        )
+        self._operation_attempt_unresolved_item_writes = bool(
+            self.attempt_unresolved_item_writes.GetValue()
+        )
+        self._operation_preserve_bedrock = bool(
+            self.preserve_bedrock.GetValue()
+        )
+        if (
+            self._operation_external_scan_identity_enabled
             or self.save_found_language_entries.GetValue()
         ):
             self._ensure_external_language_data_loaded()
@@ -11714,7 +11898,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             self._queue_missing_installed_language_entries()
             self._write_pending_found_entries()
 
-        if self.use_conversion_entries.GetValue():
+        if self._operation_use_conversion_entries:
             self._ensure_conversion_entries_loaded()
 
         try:
