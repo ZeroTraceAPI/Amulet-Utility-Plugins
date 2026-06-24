@@ -28,7 +28,7 @@ Applies a reversible dark theme to Amulet's wxPython interface, including newly 
 
 ### [World Chunk Pre-Generator](Companion-Tools/World-Chunk-Pre-Generator)
 
-Temporarily moves the player through a centered square area so Minecraft Bedrock Edition cam generate and save nearby chunks in advance. It is intended for Amulet preparation, map testing, and reducing later terrain-generation pauses. It does not keep chunks loaded after the operation ends.
+Temporarily moves the player through a centered square area so Minecraft Bedrock Edition can generate and save nearby chunks in advance. It is intended for Amulet preparation, map testing, and reducing later terrain-generation pauses. It does not keep chunks loaded after the operation ends.
 
 See the tool's [README](Companion-Tools/World-Chunk-Pre-Generator/README.md) for installation and usage or [`COMMANDS.md`](Companion-Tools/World-Chunk-Pre-Generator/COMMANDS.md) for commands.
 
