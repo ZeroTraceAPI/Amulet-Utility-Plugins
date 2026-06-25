@@ -52,7 +52,7 @@ Preview media is available in the [`Media`](Media) folder, with separate folders
 
 Create the folders manually if they do not already exist.
 
-The plugins are currently tested and supported on Windows. Other operating systems may work but are not currently verified. World Chunk Pre-Generator is designed for Minecraft Bedrock Edition, and its import and activation steps may differ by platform.
+The plugins are currently tested on Windows 11. Linux and macOS may also work but are not currently verified, so testing, compatibility reports, and contributions for those platforms are welcome. World Chunk Pre-Generator is designed for Minecraft Bedrock Edition, and its import and activation steps may differ by platform.
 
 ## Availability, Contact, and Contributing
 
@@ -60,10 +60,10 @@ All plugins and companion tools are free from the original maintainer, with no r
 
 The official source is the [Amulet Utility Plugins GitHub repository](https://github.com/ZeroTraceAPI/Amulet-Utility-Plugins). When sharing, forking, modifying, packaging, or redistributing these tools, please link back to the official repository so users can find a clean and current copy.
 
-Contributions are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for details. Use GitHub Issues or GitHub Discussions for public questions, bug reports, requests, and testing notes when possible.
+Contributions are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for details. Use GitHub Issues or GitHub Discussions for public questions, bug reports, requests, compatibility reports, and testing notes when possible.
 
 If you do not want to create a GitHub account, contact the maintainer at:
 
 `ZeroTraceAPI@proton.me`
 
-Include the plugin or tool version, Amulet version, Minecraft Bedrock Edition version, and a clear description when relevant. Email support is not guaranteed, but reasonable project-related messages are welcome.
+Include the plugin or tool version, Amulet version, Minecraft Bedrock Edition version, operating system, and a clear description when relevant. Email support is not guaranteed, but reasonable project-related messages are welcome.
