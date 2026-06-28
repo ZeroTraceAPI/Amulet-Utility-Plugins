@@ -1,5 +1,6 @@
 import ast
 import collections
+import ctypes
 import inspect
 import json
 import os
@@ -7,11 +8,20 @@ import re
 import stat
 import tempfile
 import time
+from time import perf_counter
+import weakref
 from pathlib import Path
 from datetime import datetime
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple, Set
 
 import wx
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except Exception:
+    Image = None
+    ImageDraw = None
+    ImageFont = None
 from amulet_map_editor.programs.edit.api.behaviour import BlockSelectionBehaviour
 from amulet_map_editor.programs.edit.api.operations import DefaultOperationUI
 
@@ -50,7 +60,5782 @@ if TYPE_CHECKING:
     from amulet.api.level import BaseLevel
     from amulet_map_editor.programs.edit.api.canvas import EditCanvas
 
+CUSTOM_UI_NAME_PREFIX = "AmuletUtilityCustomUI"
+CUSTOM_UI_THEME_OWNED_ATTR = "_amulet_utility_theme_owned"
+
+FLOATING_DEFAULT_SIZE = (560, 780)
+FLOATING_MIN_SIZE = (440, 580)
+MANAGE_DIALOG_DEFAULT_SIZE = (560, 460)
+MANAGE_DIALOG_MIN_SIZE = (554, 410)
+
+BLOCKS_TO_STORAGE_THEME = {
+    "passive_window": wx.Colour(20, 15, 25),
+    "passive_surface": wx.Colour(31, 23, 38),
+    "passive_surface_alt": wx.Colour(27, 20, 33),
+    "passive_border": wx.Colour(72, 52, 86),
+    "window": wx.Colour(16, 13, 20),
+    "surface": wx.Colour(26, 21, 31),
+    "surface_alt": wx.Colour(23, 18, 28),
+    "surface_hover": wx.Colour(42, 31, 51),
+    "surface_pressed": wx.Colour(69, 36, 103),
+    "border": wx.Colour(78, 60, 91),
+    "border_soft": wx.Colour(57, 44, 67),
+    "text": wx.Colour(239, 235, 244),
+    "muted": wx.Colour(174, 161, 185),
+    "accent": wx.Colour(128, 61, 196),
+    "accent_hover": wx.Colour(151, 79, 224),
+    "accent_pressed": wx.Colour(99, 43, 157),
+    "accent_soft": wx.Colour(72, 39, 105),
+    "disabled": wx.Colour(88, 78, 96),
+    "console_bg": wx.Colour(7, 5, 9),
+    "console_text": wx.Colour(91, 224, 125),
+    "warning": wx.Colour(220, 181, 79),
+}
+
+TOOLTIP_BORDER_COLOUR = BLOCKS_TO_STORAGE_THEME["accent_hover"]
+TOOLTIP_BORDER_WIDTH = 2
+
+CHOICE_POPUP_TRANSPARENT_COLOUR = wx.Colour(1, 2, 3)
+
+UI_CARD_MARGIN = 10
+UI_CARD_PADDING = 12
+UI_CONTROL_GAP = 7
+UI_FOOTER_MARGIN = 12
+UI_SCROLLBAR_WIDTH = 12
+
+UI_MAIN_CONTENT_MAX_WIDTH = 588
+
+UI_CHECKBOX_HEIGHT = 24
+UI_CHECKBOX_BOX_SIZE = 18
+UI_CHECKBOX_LEFT_PADDING = 2
+UI_CHECKBOX_LABEL_GAP = 8
+UI_CHECKBOX_RIGHT_PADDING = 12
+UI_CHECKBOX_TEXT_VERTICAL_PADDING = 6
+
+UI_CHECKBOX_GAP_REDUCTION = 5
+UI_CHECKBOX_CONTROL_GAP = max(
+    0,
+    UI_CONTROL_GAP - UI_CHECKBOX_GAP_REDUCTION,
+)
+
+UI_FINAL_CHECKBOX_BOTTOM_EXTRA = 4
+
+UI_COLLAPSIBLE_CONTENT_INSET = 2
+UI_COLLAPSIBLE_CONTENT_RADIUS = 10
+
+_CHECKBOX_SPACING_SIZERS = {}
+_CHECKBOX_SPACING_BASELINES = {}
+_CHECKBOX_SPACING_REFRESH_PENDING = set()
+_CHECKBOX_GROUP_END_SPACERS = {}
+
+def _register_checkbox_spacing_sizer(sizer):
+    try:
+        _CHECKBOX_SPACING_SIZERS[id(sizer)] = sizer
+    except Exception:
+        pass
+
+def _sizer_item_window(item):
+    try:
+        return item.GetWindow()
+    except Exception:
+        return None
+
+def _sizer_item_is_shown(item):
+    window = _sizer_item_window(item)
+    if window is not None:
+        try:
+            return bool(window.IsShown())
+        except Exception:
+            return True
+
+    try:
+        child_sizer = item.GetSizer()
+    except Exception:
+        child_sizer = None
+
+    if child_sizer is not None:
+        try:
+            children = child_sizer.GetChildren()
+        except Exception:
+            return True
+
+        for child in children:
+            try:
+                if child.IsSpacer():
+                    continue
+            except Exception:
+                pass
+
+            if _sizer_item_is_shown(child):
+                return True
+
+        return False
+
+    return True
+
+def _read_spacer_size(item):
+    spacer = item.GetSpacer()
+    try:
+        return int(spacer.width), int(spacer.height)
+    except Exception:
+        return int(spacer[0]), int(spacer[1])
+
+def _capture_checkbox_spacing_baseline(sizer):
+    records = []
+    item_count = int(sizer.GetItemCount())
+
+    for index in range(item_count):
+        item = sizer.GetItem(index)
+        if item.IsSpacer():
+            width, height = _read_spacer_size(item)
+            records.append(
+                {
+                    "kind": "spacer",
+                    "width": width,
+                    "height": height,
+                }
+            )
+        else:
+            records.append(
+                {
+                    "kind": "item",
+                    "flags": int(item.GetFlag()),
+                    "border": int(item.GetBorder()),
+                }
+            )
+
+    baseline = {
+        "count": item_count,
+        "records": records,
+    }
+    _CHECKBOX_SPACING_BASELINES[id(sizer)] = baseline
+    return baseline
+
+def _restore_checkbox_spacing_baseline(sizer, baseline):
+    for index, record in enumerate(baseline["records"]):
+        item = sizer.GetItem(index)
+        if record["kind"] == "spacer":
+            item.SetSpacer(
+                (
+                    int(record["width"]),
+                    int(record["height"]),
+                )
+            )
+        else:
+            item.SetFlag(int(record["flags"]))
+            try:
+                item.SetBorder(int(record["border"]))
+            except Exception:
+                pass
+
+def _is_checkbox_marker(items, baseline, index):
+    if index < 0 or index + 1 >= len(items):
+        return False
+
+    record = baseline["records"][index]
+    if (
+        record["kind"] != "spacer"
+        or int(record["height"]) != 0
+    ):
+        return False
+
+    next_window = _sizer_item_window(items[index + 1])
+    return isinstance(next_window, ModernCheckBox)
+
+def _spacer_belongs_to_hidden_checkbox(items, index):
+    if index <= 0:
+        return False
+
+    previous_window = _sizer_item_window(items[index - 1])
+    if not isinstance(previous_window, ModernCheckBox):
+        return False
+
+    try:
+        return not bool(previous_window.IsShown())
+    except Exception:
+        return False
+
+def _refresh_checkbox_spacing(sizer):
+    try:
+        item_count = int(sizer.GetItemCount())
+    except Exception:
+        return
+
+    baseline = _CHECKBOX_SPACING_BASELINES.get(id(sizer))
+    if (
+        baseline is None
+        or int(baseline.get("count", -1)) != item_count
+    ):
+        try:
+            baseline = _capture_checkbox_spacing_baseline(sizer)
+        except Exception:
+            return
+
+    try:
+        _restore_checkbox_spacing_baseline(sizer, baseline)
+    except Exception:
+        return
+
+    items = [sizer.GetItem(index) for index in range(item_count)]
+
+    group_end_indices = _CHECKBOX_GROUP_END_SPACERS.get(id(sizer), ())
+    for spacer_index, spacer_item in enumerate(items):
+        if spacer_index in group_end_indices:
+            continue
+        try:
+            is_spacer = spacer_item.IsSpacer()
+        except Exception:
+            is_spacer = False
+        if not is_spacer or not _spacer_belongs_to_hidden_checkbox(
+            items,
+            spacer_index,
+        ):
+            continue
+        record = baseline["records"][spacer_index]
+        if record.get("kind") != "spacer":
+            continue
+        try:
+            spacer_item.SetSpacer((int(record["width"]), 0))
+        except Exception:
+            pass
+
+    for checkbox_index, checkbox_item in enumerate(items):
+        checkbox = _sizer_item_window(checkbox_item)
+        if not isinstance(checkbox, ModernCheckBox):
+            continue
+
+        try:
+            if not checkbox.IsShown():
+                continue
+        except Exception:
+            pass
+
+        marker_index = checkbox_index - 1
+        if not _is_checkbox_marker(
+            items,
+            baseline,
+            marker_index,
+        ):
+            continue
+
+        marker_item = items[marker_index]
+        desired_gap = 0
+        scan_index = marker_index - 1
+
+        while scan_index >= 0:
+            previous_item = items[scan_index]
+            record = baseline["records"][scan_index]
+
+            if previous_item.IsSpacer():
+
+                if scan_index in _CHECKBOX_GROUP_END_SPACERS.get(
+                    id(sizer),
+                    (),
+                ):
+                    scan_index -= 1
+                    continue
+
+                if _is_checkbox_marker(
+                    items,
+                    baseline,
+                    scan_index,
+                ):
+                    scan_index -= 1
+                    continue
+
+                if _spacer_belongs_to_hidden_checkbox(
+                    items,
+                    scan_index,
+                ):
+                    scan_index -= 1
+                    continue
+
+                original_height = max(
+                    0,
+                    int(record["height"]),
+                )
+
+                previous_window = (
+                    _sizer_item_window(items[scan_index - 1])
+                    if scan_index > 0
+                    else None
+                )
+                if isinstance(previous_window, ModernCheckBox):
+
+                    try:
+                        previous_visible = previous_window.IsShown()
+                    except Exception:
+                        previous_visible = True
+
+                    if previous_visible:
+                        desired_gap = original_height
+                    else:
+                        scan_index -= 1
+                        continue
+                else:
+                    desired_gap = max(
+                        0,
+                        original_height
+                        - int(UI_CHECKBOX_GAP_REDUCTION),
+                    )
+
+                previous_item.SetSpacer(
+                    (
+                        int(record["width"]),
+                        0,
+                    )
+                )
+                break
+
+            if not _sizer_item_is_shown(previous_item):
+                scan_index -= 1
+                continue
+
+            original_flags = int(record["flags"])
+            original_border = max(
+                0,
+                int(record["border"]),
+            )
+
+            if original_flags & wx.BOTTOM:
+                desired_gap = max(
+                    0,
+                    original_border
+                    - int(UI_CHECKBOX_GAP_REDUCTION),
+                )
+                previous_item.SetFlag(
+                    original_flags & ~wx.BOTTOM
+                )
+            break
+
+        marker_item.SetSpacer((0, desired_gap))
+
+    try:
+        sizer.Layout()
+    except Exception:
+        pass
+
+    try:
+        containing_window = sizer.GetContainingWindow()
+    except Exception:
+        containing_window = None
+
+    if containing_window is not None:
+        try:
+            containing_window.InvalidateBestSize()
+        except Exception:
+            pass
+        try:
+            containing_window.Layout()
+        except Exception:
+            pass
+
+def _schedule_checkbox_spacing_refresh(sizer=None):
+    if sizer is None:
+        pending_sizers = list(_CHECKBOX_SPACING_SIZERS.values())
+    else:
+        _register_checkbox_spacing_sizer(sizer)
+        pending_sizers = [sizer]
+
+    for pending_sizer in pending_sizers:
+        key = id(pending_sizer)
+        if key in _CHECKBOX_SPACING_REFRESH_PENDING:
+            continue
+
+        _CHECKBOX_SPACING_REFRESH_PENDING.add(key)
+
+        def refresh(target=pending_sizer, target_key=key):
+            _CHECKBOX_SPACING_REFRESH_PENDING.discard(
+                target_key
+            )
+            _refresh_checkbox_spacing(target)
+
+            if not _CHECKBOX_SPACING_REFRESH_PENDING:
+                try:
+                    containing_window = target.GetContainingWindow()
+                except Exception:
+                    containing_window = None
+                if containing_window is not None:
+                    try:
+                        _refresh_wrapped_text_layout(containing_window)
+                    except Exception:
+                        pass
+
+        try:
+            wx.CallAfter(refresh)
+        except Exception:
+            refresh()
+
+def _tighten_gap_before_checkbox(sizer):
+    _register_checkbox_spacing_sizer(sizer)
+
+    try:
+        sizer.AddSpacer(0)
+    except Exception:
+        return
+
+    _schedule_checkbox_spacing_refresh(sizer)
+
+def _add_checkbox_group_bottom_spacing(sizer):
+    _register_checkbox_spacing_sizer(sizer)
+    try:
+        item = sizer.AddSpacer(
+            max(0, int(UI_FINAL_CHECKBOX_BOTTOM_EXTRA))
+        )
+        index = int(sizer.GetItemCount()) - 1
+        _CHECKBOX_GROUP_END_SPACERS.setdefault(
+            id(sizer),
+            set(),
+        ).add(index)
+        return item
+    except Exception:
+        return None
+
+def _set_checkbox_group_bottom_spacing_visible(item, visible):
+    if item is None:
+        return
+    try:
+        item.Show(bool(visible))
+    except Exception:
+        pass
+
+def _invalidate_layout_best_size_chain(window):
+    current = window
+    for _depth in range(12):
+        if current is None:
+            break
+        try:
+            current.InvalidateBestSize()
+        except Exception:
+            pass
+        try:
+            current = current.GetParent()
+        except Exception:
+            break
+
+def _set_window_sizer_item_visible(window, visible):
+    if window is None:
+        return
+
+    show = bool(visible)
+    item = None
+    try:
+        containing_sizer = window.GetContainingSizer()
+    except Exception:
+        containing_sizer = None
+
+    if containing_sizer is not None:
+        try:
+            item = containing_sizer.GetItem(window)
+        except Exception:
+            item = None
+
+    if item is not None:
+        try:
+            item.Show(show)
+        except Exception:
+            pass
+
+    try:
+        window.Show(show)
+    except Exception:
+        pass
+
+    try:
+        parent = window.GetParent()
+    except Exception:
+        parent = None
+    _invalidate_layout_best_size_chain(parent)
+
+def _set_sizer_item_visible(item, visible):
+    if item is None:
+        return
+    try:
+        item.Show(bool(visible))
+    except Exception:
+        pass
+
+    containing_window = None
+    try:
+        window = item.GetWindow()
+    except Exception:
+        window = None
+    if window is not None:
+        try:
+            containing_window = window.GetParent()
+        except Exception:
+            containing_window = None
+    else:
+        try:
+            child_sizer = item.GetSizer()
+        except Exception:
+            child_sizer = None
+        if child_sizer is not None:
+            try:
+                containing_window = child_sizer.GetContainingWindow()
+            except Exception:
+                containing_window = None
+
+    _invalidate_layout_best_size_chain(containing_window)
+
+STORAGE_SELECTOR_ICON_COLUMNS = 3
+SHULKER_SELECTOR_ICON_COLUMNS = 4
+SHULKER_SELECTOR_VISIBLE_ROWS = 4
+STORAGE_SELECTOR_TILE_HEIGHT = 104
+STORAGE_SELECTOR_ICON_SIZE = 72
+STORAGE_SELECTOR_ICON_OFFSET = 7
+STORAGE_SELECTOR_ICON_BOTTOM_PADDING = 4
+STORAGE_SELECTOR_MIN_WIDTH = 520
+STORAGE_SELECTOR_GRID_GAP = 5
+STORAGE_SELECTOR_POPUP_RADIUS = 12
+
+STORAGE_ICON_ITEM_IDS = {
+    "Chest": "chest",
+    "Barrel": "barrel",
+    "Shulker Box": "shulker_box",
+    "default": "shulker_box",
+    "white": "white_shulker_box",
+    "orange": "orange_shulker_box",
+    "magenta": "magenta_shulker_box",
+    "light_blue": "light_blue_shulker_box",
+    "yellow": "yellow_shulker_box",
+    "lime": "lime_shulker_box",
+    "pink": "pink_shulker_box",
+    "gray": "gray_shulker_box",
+    "light_gray": "light_gray_shulker_box",
+    "cyan": "cyan_shulker_box",
+    "purple": "purple_shulker_box",
+    "blue": "blue_shulker_box",
+    "brown": "brown_shulker_box",
+    "green": "green_shulker_box",
+    "red": "red_shulker_box",
+    "black": "black_shulker_box",
+}
+
+STORAGE_ICON_FALLBACK_SPECS = {
+
+    "Chest": ("chest_entity", "minecraft:entity/chest/normal"),
+    "Barrel": ("barrel_block", "minecraft:block/barrel_side"),
+    "Shulker Box": ("shulker_entity", "minecraft:entity/shulker/shulker"),
+    "default": ("shulker_entity", "minecraft:entity/shulker/shulker"),
+    "white": ("shulker_entity", "minecraft:entity/shulker/shulker_white"),
+    "orange": ("shulker_entity", "minecraft:entity/shulker/shulker_orange"),
+    "magenta": ("shulker_entity", "minecraft:entity/shulker/shulker_magenta"),
+    "light_blue": ("shulker_entity", "minecraft:entity/shulker/shulker_light_blue"),
+    "yellow": ("shulker_entity", "minecraft:entity/shulker/shulker_yellow"),
+    "lime": ("shulker_entity", "minecraft:entity/shulker/shulker_lime"),
+    "pink": ("shulker_entity", "minecraft:entity/shulker/shulker_pink"),
+    "gray": ("shulker_entity", "minecraft:entity/shulker/shulker_gray"),
+    "light_gray": ("shulker_entity", "minecraft:entity/shulker/shulker_light_gray"),
+    "cyan": ("shulker_entity", "minecraft:entity/shulker/shulker_cyan"),
+    "purple": ("shulker_entity", "minecraft:entity/shulker/shulker_purple"),
+    "blue": ("shulker_entity", "minecraft:entity/shulker/shulker_blue"),
+    "brown": ("shulker_entity", "minecraft:entity/shulker/shulker_brown"),
+    "green": ("shulker_entity", "minecraft:entity/shulker/shulker_green"),
+    "red": ("shulker_entity", "minecraft:entity/shulker/shulker_red"),
+    "black": ("shulker_entity", "minecraft:entity/shulker/shulker_black"),
+}
+
+SHULKER_COLOR_RGB = {
+    "default": (116, 81, 132),
+    "white": (222, 222, 214),
+    "orange": (216, 127, 51),
+    "magenta": (178, 76, 216),
+    "light_blue": (102, 153, 216),
+    "yellow": (229, 229, 51),
+    "lime": (127, 204, 25),
+    "pink": (242, 127, 165),
+    "gray": (76, 76, 76),
+    "light_gray": (153, 153, 153),
+    "cyan": (76, 127, 153),
+    "purple": (127, 63, 178),
+    "blue": (51, 76, 178),
+    "brown": (102, 76, 51),
+    "green": (102, 127, 51),
+    "red": (153, 51, 51),
+    "black": (37, 37, 37),
+}
+
+SHULKER_COLOR_LABELS = {
+    "default": "Default",
+    "white": "White",
+    "orange": "Orange",
+    "magenta": "Magenta",
+    "light_blue": "Light Blue",
+    "yellow": "Yellow",
+    "lime": "Lime",
+    "pink": "Pink",
+    "gray": "Gray",
+    "light_gray": "Light Gray",
+    "cyan": "Cyan",
+    "purple": "Purple",
+    "blue": "Blue",
+    "brown": "Brown",
+    "green": "Green",
+    "red": "Red",
+    "black": "Black",
+}
+SHULKER_COLOR_VALUES_BY_LABEL = {
+    label: value
+    for value, label in SHULKER_COLOR_LABELS.items()
+}
+SHULKER_COLOR_CHOICES = tuple(SHULKER_COLOR_LABELS.values())
+
+def _shulker_color_value(value):
+    text = str(value or "").strip()
+    if text in SHULKER_COLOR_RGB:
+        return text
+
+    mapped = SHULKER_COLOR_VALUES_BY_LABEL.get(text)
+    if mapped is not None:
+        return mapped
+
+    normalized = text.lower().replace(" ", "_")
+    if normalized in SHULKER_COLOR_RGB:
+        return normalized
+    return "default"
+
+def _shulker_color_label(value):
+    return SHULKER_COLOR_LABELS[_shulker_color_value(value)]
+
+def _storage_icon_choice_key(choice):
+    text = str(choice)
+    return SHULKER_COLOR_VALUES_BY_LABEL.get(text, text)
+
+def _mark_custom_ui_owned(window, semantic_name=None):
+    try:
+        setattr(window, CUSTOM_UI_THEME_OWNED_ATTR, True)
+    except Exception:
+        pass
+    try:
+        window.SetName(semantic_name or f"{CUSTOM_UI_NAME_PREFIX}:Control")
+    except Exception:
+        pass
+    return window
+
+def _try_apply_dark_native_theme(window):
+    if os.name != "nt":
+        return False
+    try:
+        handle = int(window.GetHandle())
+        if not handle:
+            return False
+        set_window_theme = ctypes.windll.uxtheme.SetWindowTheme
+        set_window_theme.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p]
+        set_window_theme.restype = ctypes.c_int
+        result = set_window_theme(ctypes.c_void_p(handle), "DarkMode_Explorer", None)
+        if result == 0:
+            try:
+                window.Refresh(True)
+            except Exception:
+                pass
+            return True
+    except Exception:
+        pass
+    return False
+
+def _dip(window, value):
+    try:
+        return int(window.FromDIP(value))
+    except Exception:
+        return int(value)
+
+def _parent_background(window):
+    try:
+        parent = window.GetParent()
+        color = parent.GetBackgroundColour() if parent is not None else None
+        if color is not None and color.IsOk():
+            return color
+    except Exception:
+        pass
+    return BLOCKS_TO_STORAGE_THEME["window"]
+
+def _graphics_text_size(graphics_context, text):
+    try:
+        extent = graphics_context.GetTextExtent(str(text))
+        return float(extent[0]), float(extent[1])
+    except Exception:
+        return 0.0, 0.0
+
+def _emit_command_event(window, event_binder):
+    try:
+        event = wx.CommandEvent(event_binder.typeId, window.GetId())
+        event.SetEventObject(window)
+        window.GetEventHandler().ProcessEvent(event)
+    except Exception:
+        pass
+
+def _make_text(parent, label, point_size=None, bold=False, muted=False):
+    control = wx.StaticText(parent, label=label)
+    _mark_custom_ui_owned(control)
+    try:
+        font = control.GetFont()
+        if point_size is not None:
+            font.SetPointSize(point_size)
+        if bold:
+            font.SetWeight(wx.FONTWEIGHT_BOLD)
+        control.SetFont(font)
+    except Exception:
+        pass
+    try:
+        control.SetForegroundColour(
+            BLOCKS_TO_STORAGE_THEME["muted"] if muted else BLOCKS_TO_STORAGE_THEME["text"]
+        )
+        control.SetBackgroundColour(parent.GetBackgroundColour())
+    except Exception:
+        pass
+    return control
+
+def _wrap_static_text_lines(device_context, text, maximum_width):
+    maximum_width = max(1, int(maximum_width))
+    wrapped_lines = []
+
+    for paragraph in str(text).splitlines() or [""]:
+        words = paragraph.split()
+        if not words:
+            wrapped_lines.append("")
+            continue
+
+        current_line = words[0]
+        for word in words[1:]:
+            candidate = f"{current_line} {word}"
+            try:
+                candidate_width = device_context.GetTextExtent(candidate)[0]
+            except Exception:
+                candidate_width = maximum_width + 1
+
+            if candidate_width <= maximum_width:
+                current_line = candidate
+            else:
+                wrapped_lines.append(current_line)
+                current_line = word
+
+        wrapped_lines.append(current_line)
+
+    return wrapped_lines or [""]
+
+def _refresh_wrapped_text_layout(control_reference):
+    try:
+        control = control_reference()
+    except Exception:
+        control = control_reference
+
+    if control is None:
+        return
+
+    try:
+        parent = control.GetParent()
+    except Exception:
+        parent = None
+
+    current = control
+    for _depth in range(12):
+        if current is None:
+            break
+        try:
+            current.InvalidateBestSize()
+        except Exception:
+            pass
+        try:
+            current = current.GetParent()
+        except Exception:
+            break
+
+    try:
+        if parent is not None:
+            parent.Layout()
+    except Exception:
+        pass
+
+    ancestor = parent
+    for _depth in range(12):
+        if ancestor is None:
+            break
+
+        sync_layout = getattr(ancestor, "_modern_sync_layout", None)
+        if callable(sync_layout):
+            try:
+                sync_layout()
+            except Exception:
+                pass
+            break
+
+        try:
+            ancestor = ancestor.GetParent()
+        except Exception:
+            break
+
+def _make_wrapped_text(
+    parent,
+    label,
+    point_size=None,
+    bold=False,
+    muted=False,
+):
+    container = wx.Panel(
+        parent,
+        style=wx.BORDER_NONE | wx.CLIP_CHILDREN,
+    )
+    _mark_custom_ui_owned(container)
+    try:
+        container.SetBackgroundColour(parent.GetBackgroundColour())
+    except Exception:
+        pass
+
+    text_control = _make_text(
+        container,
+        label,
+        point_size=point_size,
+        bold=bold,
+        muted=muted,
+    )
+    try:
+        text_control.SetWindowStyleFlag(
+            text_control.GetWindowStyleFlag()
+            | wx.ST_NO_AUTORESIZE
+        )
+    except Exception:
+        pass
+
+    container_sizer = wx.BoxSizer(wx.VERTICAL)
+    container_sizer.Add(text_control, 0, wx.EXPAND)
+    container.SetSizer(container_sizer)
+
+    text_state = {"source": str(label)}
+    layout_state = {
+        "signature": None,
+        "parent_layout_pending": False,
+    }
+
+    try:
+        container_reference = weakref.ref(container)
+        text_reference = weakref.ref(text_control)
+    except Exception:
+        container_reference = lambda: container
+        text_reference = lambda: text_control
+
+    def measure_line_height(control, device_context):
+        try:
+            measured_height = int(
+                device_context.GetTextExtent("Ag")[1]
+            )
+        except Exception:
+            measured_height = 0
+        try:
+            character_height = int(control.GetCharHeight())
+        except Exception:
+            character_height = 0
+        return max(
+            _dip(control, 12),
+            measured_height,
+            character_height,
+        )
+
+    def queue_parent_layout():
+        if layout_state["parent_layout_pending"]:
+            return
+        layout_state["parent_layout_pending"] = True
+
+        def perform_parent_layout():
+            layout_state["parent_layout_pending"] = False
+            _refresh_wrapped_text_layout(container_reference)
+
+        try:
+            wx.CallAfter(perform_parent_layout)
+        except Exception:
+            perform_parent_layout()
+
+    def apply_wrap(width=None):
+        wrapped_container = container_reference()
+        wrapped_control = text_reference()
+        if wrapped_container is None or wrapped_control is None:
+            return
+
+        try:
+            client_width = int(
+                width
+                if width is not None
+                else wrapped_container.GetClientSize().width
+            )
+        except Exception:
+            client_width = 0
+
+        if client_width <= _dip(wrapped_container, 40):
+            return
+
+        available_width = max(
+            _dip(wrapped_container, 80),
+            client_width - _dip(wrapped_container, 2),
+        )
+
+        try:
+            device_context = wx.ClientDC(wrapped_control)
+            device_context.SetFont(wrapped_control.GetFont())
+            lines = _wrap_static_text_lines(
+                device_context,
+                text_state["source"],
+                available_width,
+            )
+            rendered_text = "\n".join(lines)
+            line_height = measure_line_height(
+                wrapped_control,
+                device_context,
+            )
+            line_gap = _dip(wrapped_control, 1)
+            required_height = (
+                len(lines) * line_height
+                + max(0, len(lines) - 1) * line_gap
+                + _dip(wrapped_control, 1)
+            )
+        except Exception:
+            return
+
+        layout_signature = (
+            available_width,
+            rendered_text,
+            required_height,
+        )
+        if layout_state["signature"] == layout_signature:
+            return
+
+        layout_state["signature"] = layout_signature
+
+        try:
+            if wrapped_control.GetLabel() != rendered_text:
+                wx.StaticText.SetLabel(
+                    wrapped_control,
+                    rendered_text,
+                )
+        except Exception:
+            pass
+
+        height_changed = False
+
+        try:
+            text_minimum = wrapped_control.GetMinSize()
+            if int(text_minimum.height) != required_height:
+                wrapped_control.SetMinSize(
+                    (-1, required_height)
+                )
+                height_changed = True
+        except Exception:
+            pass
+
+        try:
+            container_minimum = wrapped_container.GetMinSize()
+            if (
+                int(container_minimum.width) != 1
+                or int(container_minimum.height) != required_height
+            ):
+                wrapped_container.SetMinSize(
+                    (1, required_height)
+                )
+                height_changed = True
+        except Exception:
+            pass
+
+        if height_changed:
+            try:
+                wrapped_container.Layout()
+            except Exception:
+                pass
+            queue_parent_layout()
+
+    def on_size(event):
+        try:
+            apply_wrap(event.GetSize().width)
+        except Exception:
+            pass
+        event.Skip()
+
+    try:
+        initial_context = wx.ClientDC(text_control)
+        initial_context.SetFont(text_control.GetFont())
+        initial_height = measure_line_height(
+            text_control,
+            initial_context,
+        ) + _dip(text_control, 1)
+    except Exception:
+        initial_height = _dip(container, 16)
+
+    text_control.SetMinSize((-1, initial_height))
+    container.SetMinSize((1, initial_height))
+    container.Bind(wx.EVT_SIZE, on_size)
+
+    container._responsive_text_state = text_state
+    container._responsive_text_control = text_control
+    container._responsive_layout_state = layout_state
+    container._responsive_wrap_callback = apply_wrap
+
+    try:
+        wx.CallAfter(apply_wrap)
+    except Exception:
+        pass
+
+    return container
+
+class AmuletStorageIconCache:
+
+    ATLAS_JSON_LIMIT = 16 * 1024 * 1024
+    MODEL_JSON_LIMIT = 2 * 1024 * 1024
+    BASE_ICON_SIZE = 64
+
+    def __init__(self):
+        self._loaded = False
+        self._resource_roots = []
+        self._base_icons = {}
+
+        self._icon_sources = {}
+        self._bitmap_cache = {}
+        self._compact_bitmap_cache = {}
+
+    @staticmethod
+    def _local_app_data_root():
+        value = os.environ.get("LOCALAPPDATA", "").strip()
+        if value:
+            return Path(value)
+        return Path.home() / "AppData" / "Local"
+
+    @classmethod
+    def _cache_root(cls):
+        return (
+            cls._local_app_data_root()
+            / "AmuletTeam"
+            / "AmuletMapEditor"
+            / "Cache"
+            / "resource_packs"
+        )
+
+    @staticmethod
+    def _normalize_path(value):
+        return str(value).replace("\\", "/").lower()
+
+    @staticmethod
+    def _texture_suffix(texture_reference):
+        reference = str(texture_reference or "").strip()
+        if not reference:
+            return ""
+        if ":" in reference:
+            _namespace, reference = reference.split(":", 1)
+        reference = reference.strip("/").replace("\\", "/")
+        return f"/textures/{reference}.png".lower()
+
+    @staticmethod
+    def _safe_json(path, size_limit):
+        try:
+            path = Path(path)
+            if not path.is_file() or path.stat().st_size > int(size_limit):
+                return None
+            with path.open("r", encoding="utf-8-sig") as handle:
+                return json.load(handle)
+        except Exception:
+            return None
+
+    def _discover_resource_roots(self):
+        java_root = self._cache_root() / "java"
+        roots = []
+        try:
+            children = [child for child in java_root.iterdir() if child.is_dir()]
+        except Exception:
+            children = []
+
+        children.sort(
+            key=lambda child: (
+                child.name.lower() == "vanilla",
+                -self._safe_mtime(child),
+                child.name.lower(),
+            )
+        )
+        for child in children:
+            candidate = child / "assets" / "minecraft"
+            if candidate.is_dir():
+                roots.append(candidate)
+
+        vanilla = java_root / "vanilla" / "assets" / "minecraft"
+        if vanilla.is_dir() and vanilla not in roots:
+            roots.append(vanilla)
+        self._resource_roots = roots
+
+    @staticmethod
+    def _safe_mtime(path):
+        try:
+            return float(Path(path).stat().st_mtime)
+        except Exception:
+            return 0.0
+
+    def _find_resource_file(self, relative_path):
+        relative_path = Path(relative_path)
+        for root in self._resource_roots:
+            candidate = root / relative_path
+            try:
+                if candidate.is_file():
+                    return candidate
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _model_relative_path(model_reference):
+        reference = str(model_reference or "").strip()
+        if not reference:
+            return None
+        if ":" in reference:
+            _namespace, reference = reference.split(":", 1)
+        reference = reference.strip("/").replace("\\", "/")
+        return Path("models") / f"{reference}.json"
+
+    def _resolve_model_spec(self, item_id):
+        item_path = self._find_resource_file(Path("items") / f"{item_id}.json")
+        item_data = self._safe_json(item_path, self.MODEL_JSON_LIMIT) if item_path else None
+        if not isinstance(item_data, dict):
+            return None
+
+        model_entry = item_data.get("model")
+        if isinstance(model_entry, dict):
+            model_reference = model_entry.get("model")
+        elif isinstance(model_entry, str):
+            model_reference = model_entry
+        else:
+            model_reference = None
+        if not isinstance(model_reference, str) or not model_reference:
+            return None
+
+        chain = []
+        current = model_reference
+        visited = set()
+        for _ in range(16):
+            marker = str(current).lower()
+            if marker in visited:
+                break
+            visited.add(marker)
+            relative = self._model_relative_path(current)
+            model_path = self._find_resource_file(relative) if relative else None
+            model_data = self._safe_json(model_path, self.MODEL_JSON_LIMIT) if model_path else None
+            if not isinstance(model_data, dict):
+
+                chain.append({"parent": current, "textures": {}})
+                break
+            chain.append(model_data)
+            parent = model_data.get("parent")
+            if not isinstance(parent, str) or not parent:
+                break
+            current = parent
+
+        if not chain:
+            return None
+
+        textures = {}
+        for model_data in reversed(chain):
+            model_textures = model_data.get("textures", {})
+            if isinstance(model_textures, dict):
+                textures.update(model_textures)
+
+        parent_values = [str(model.get("parent", "")).lower() for model in chain]
+        model_values = [str(model_reference).lower(), *parent_values]
+        if any(value.endswith("item/generated") for value in model_values):
+            render_kind = "generated"
+            texture_value = textures.get("layer0")
+        elif any(
+            value.endswith((
+                "block/cube_all",
+                "block/cube_bottom_top",
+                "block/cube_column",
+                "block/cube_column_horizontal",
+            ))
+            for value in model_values
+        ):
+            render_kind = "cube_all"
+            texture_value = (
+                textures.get("all")
+                or textures.get("side")
+                or textures.get("end")
+                or textures.get("top")
+            )
+        else:
+            return None
+
+        for _ in range(12):
+            if not isinstance(texture_value, str) or not texture_value.startswith("#"):
+                break
+            texture_value = textures.get(texture_value[1:])
+        if not isinstance(texture_value, str) or not texture_value:
+            return None
+        return render_kind, texture_value
+
+    def _model_specs(self):
+        specs = {}
+        special_kinds = {"chest_entity", "barrel_block", "shulker_entity"}
+        for choice, item_id in STORAGE_ICON_ITEM_IDS.items():
+
+            special_spec = STORAGE_ICON_FALLBACK_SPECS.get(choice)
+            if special_spec is not None and special_spec[0] in special_kinds:
+                specs[choice] = special_spec
+                continue
+            spec = self._resolve_model_spec(item_id)
+            if spec is None:
+                spec = special_spec
+            if spec is not None:
+                specs[choice] = spec
+        return specs
+
+    def _select_atlas(self, specs):
+        atlas_root = self._cache_root() / "atlas"
+        try:
+            json_files = list(atlas_root.glob("*.json"))
+        except Exception:
+            json_files = []
+
+        required_suffixes = {
+            self._texture_suffix(texture_reference)
+            for _kind, texture_reference in specs.values()
+        }
+        required_suffixes.discard("")
+        candidates = []
+        for json_path in json_files:
+            png_path = json_path.with_suffix(".png")
+            if not png_path.is_file():
+                continue
+            data = self._safe_json(json_path, self.ATLAS_JSON_LIMIT)
+            if (
+                not isinstance(data, list)
+                or len(data) < 2
+                or not isinstance(data[1], dict)
+            ):
+                continue
+            mapping = data[1]
+            normalized_paths = [self._normalize_path(path) for path in mapping.keys()]
+            score = sum(
+                1
+                for suffix in required_suffixes
+                if any(path.endswith(suffix) for path in normalized_paths)
+            )
+            try:
+                declared_time = float(data[0])
+            except Exception:
+                declared_time = 0.0
+            candidates.append(
+                (
+                    score,
+                    declared_time,
+                    self._safe_mtime(json_path),
+                    json_path,
+                    png_path,
+                    mapping,
+                )
+            )
+
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+        _score, _declared, _mtime, json_path, png_path, mapping = candidates[0]
+        return json_path, png_path, mapping
+
+    def _atlas_texture(self, atlas_image, atlas_mapping, texture_reference):
+        suffix = self._texture_suffix(texture_reference)
+        if not suffix:
+            return None
+        matches = []
+        for raw_path, raw_uv in atlas_mapping.items():
+            normalized = self._normalize_path(raw_path)
+            if normalized.endswith(suffix):
+                matches.append((raw_path, raw_uv))
+        if not matches:
+            return None
+
+        _path, uv = matches[-1]
+        if not isinstance(uv, (list, tuple)) or len(uv) != 4:
+            return None
+        try:
+            width, height = atlas_image.size
+            left = int(round(float(uv[0]) * width))
+            top = int(round(float(uv[1]) * height))
+            right = int(round(float(uv[2]) * width))
+            bottom = int(round(float(uv[3]) * height))
+        except Exception:
+            return None
+        left = max(0, min(left, width - 1))
+        top = max(0, min(top, height - 1))
+        right = max(left + 1, min(right, width))
+        bottom = max(top + 1, min(bottom, height))
+        try:
+            return atlas_image.crop((left, top, right, bottom)).convert("RGBA")
+        except Exception:
+            return None
+
+    def _direct_texture(self, texture_reference):
+        suffix = self._texture_suffix(texture_reference)
+        if not suffix:
+            return None
+        relative = suffix.lstrip("/")
+        texture_path = self._find_resource_file(relative)
+        if texture_path is None:
+            return None
+        try:
+            with Image.open(texture_path) as image:
+                return image.convert("RGBA")
+        except Exception:
+            return None
+
+    @staticmethod
+    def _nearest_filter():
+        try:
+            return Image.Resampling.NEAREST
+        except Exception:
+            return Image.NEAREST
+
+    @staticmethod
+    def _smooth_filter():
+        try:
+            return Image.Resampling.LANCZOS
+        except Exception:
+            return Image.LANCZOS
+
+    @staticmethod
+    def _first_animation_frame(texture):
+        texture = texture.convert("RGBA")
+        width, height = texture.size
+        if width > 0 and height > width and height % width == 0:
+            return texture.crop((0, 0, width, width))
+        if height > 0 and width > height and width % height == 0:
+            return texture.crop((0, 0, height, height))
+        return texture
+
+    @classmethod
+    def _render_flat_icon(cls, texture):
+        canvas_size = cls.BASE_ICON_SIZE
+        canvas = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
+        texture = cls._first_animation_frame(texture)
+        target = 54
+        scale = min(target / max(1, texture.width), target / max(1, texture.height))
+        width = max(1, int(round(texture.width * scale)))
+        height = max(1, int(round(texture.height * scale)))
+        resized = texture.resize((width, height), cls._nearest_filter())
+        canvas.alpha_composite(
+            resized,
+            ((canvas_size - width) // 2, (canvas_size - height) // 2),
+        )
+        return canvas
+
+    @staticmethod
+    def _shade_pixel(pixel, factor):
+        red, green, blue, alpha = pixel
+        return (
+            max(0, min(255, int(round(red * factor)))),
+            max(0, min(255, int(round(green * factor)))),
+            max(0, min(255, int(round(blue * factor)))),
+            alpha,
+        )
+
+    @classmethod
+    def _render_prism_icon(
+        cls,
+        top_texture,
+        left_texture,
+        right_texture,
+        *,
+        top_shade=1.08,
+        left_shade=0.84,
+        right_shade=0.68,
+        face_scale=1.0,
+        side_height_scale=1.0,
+    ):
+        render_size = cls.BASE_ICON_SIZE * 4
+        geometry_scale = render_size / 128.0
+
+        top_texture = cls._first_animation_frame(top_texture)
+        left_texture = cls._first_animation_frame(left_texture)
+        right_texture = cls._first_animation_frame(right_texture)
+        canvas = Image.new("RGBA", (render_size, render_size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(canvas, "RGBA")
+        center_x = render_size / 2.0
+        top_y = 6.0 * geometry_scale
+        face_width = 66.0 * face_scale * geometry_scale
+        face_height = 32.0 * face_scale * geometry_scale
+        side_height = 46.0 * face_scale * side_height_scale * geometry_scale
+
+        def point(origin, basis_x, basis_y, u, v):
+            return (
+                origin[0] + basis_x[0] * u + basis_y[0] * v,
+                origin[1] + basis_x[1] * u + basis_y[1] * v,
+            )
+
+        top_origin = (center_x, top_y)
+        top_x = (face_width / 2.0, face_height / 2.0)
+        top_y_basis = (-face_width / 2.0, face_height / 2.0)
+        left_origin = (center_x - face_width / 2.0, top_y + face_height / 2.0)
+        left_x = (face_width / 2.0, face_height / 2.0)
+        left_y = (0.0, side_height)
+        right_origin = (center_x + face_width / 2.0, top_y + face_height / 2.0)
+        right_x = (-face_width / 2.0, face_height / 2.0)
+        right_y = (0.0, side_height)
+
+        def draw_face(texture, origin, basis_x, basis_y, shade):
+            source_width = max(1, int(texture.width))
+            source_height = max(1, int(texture.height))
+            for source_y in range(source_height):
+                for source_x in range(source_width):
+                    pixel = texture.getpixel((source_x, source_y))
+                    if pixel[3] <= 0:
+                        continue
+                    u0 = source_x / float(source_width)
+                    v0 = source_y / float(source_height)
+                    u1 = (source_x + 1) / float(source_width)
+                    v1 = (source_y + 1) / float(source_height)
+                    polygon = [
+                        point(origin, basis_x, basis_y, u0, v0),
+                        point(origin, basis_x, basis_y, u1, v0),
+                        point(origin, basis_x, basis_y, u1, v1),
+                        point(origin, basis_x, basis_y, u0, v1),
+                    ]
+                    draw.polygon(polygon, fill=cls._shade_pixel(pixel, shade))
+
+        draw_face(left_texture, left_origin, left_x, left_y, left_shade)
+        draw_face(right_texture, right_origin, right_x, right_y, right_shade)
+        draw_face(top_texture, top_origin, top_x, top_y_basis, top_shade)
+        return canvas.resize(
+            (cls.BASE_ICON_SIZE, cls.BASE_ICON_SIZE),
+            cls._smooth_filter(),
+        )
+
+    @classmethod
+    def _render_cube_icon(
+        cls,
+        texture,
+        *,
+        top_shade=1.08,
+        left_shade=0.84,
+        right_shade=0.68,
+        face_scale=1.0,
+    ):
+        return cls._render_prism_icon(
+            texture,
+            texture,
+            texture,
+            top_shade=top_shade,
+            left_shade=left_shade,
+            right_shade=right_shade,
+            face_scale=face_scale,
+        )
+
+    @classmethod
+    def _render_chest_icon(cls, texture):
+        texture = texture.convert("RGBA")
+        if texture.width < 56 or texture.height < 43:
+            return cls._render_flat_icon(texture)
+
+        lid_top = texture.crop((28, 0, 42, 14))
+        lid_west = texture.crop((0, 14, 14, 19))
+        lid_front = texture.crop((14, 14, 28, 19))
+
+        base_west = texture.crop((0, 33, 14, 43))
+        base_front = texture.crop((14, 33, 28, 43))
+
+        latch_front = texture.crop((1, 1, 3, 5))
+
+        front = Image.new("RGBA", (14, 15), (0, 0, 0, 0))
+        front.alpha_composite(lid_front, (0, 0))
+        front.alpha_composite(base_front, (0, 5))
+        front.alpha_composite(latch_front, (6, 3))
+
+        west = Image.new("RGBA", (14, 15), (0, 0, 0, 0))
+        west.alpha_composite(lid_west, (0, 0))
+        west.alpha_composite(base_west, (0, 5))
+
+        return cls._render_prism_icon(
+            lid_top,
+            west,
+            front,
+            top_shade=1.04,
+            left_shade=0.86,
+            right_shade=0.74,
+            face_scale=0.92,
+            side_height_scale=15.0 / 14.0,
+        )
+
+    @classmethod
+    def _render_barrel_icon(cls, side_texture, top_texture):
+        return cls._render_prism_icon(
+            cls._first_animation_frame(top_texture),
+            cls._first_animation_frame(side_texture),
+            cls._first_animation_frame(side_texture),
+            top_shade=1.04,
+            left_shade=0.86,
+            right_shade=0.72,
+            face_scale=0.94,
+        )
+
+    @classmethod
+    def _render_shulker_icon(cls, texture):
+        texture = texture.convert("RGBA")
+        if texture.width < 64 or texture.height < 52:
+            return cls._render_flat_icon(texture)
+
+        lid_top = texture.crop((16, 0, 32, 16))
+        lid_left = texture.crop((0, 16, 16, 28))
+        lid_front = texture.crop((16, 16, 32, 28))
+        base_left = texture.crop((0, 44, 16, 52))
+        base_front = texture.crop((16, 44, 32, 52))
+
+        left = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+        left.alpha_composite(base_left, (0, 8))
+        left.alpha_composite(lid_left, (0, 0))
+
+        front = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+        front.alpha_composite(base_front, (0, 8))
+        front.alpha_composite(lid_front, (0, 0))
+
+        return cls._render_prism_icon(
+            lid_top,
+            left,
+            front,
+            top_shade=1.04,
+            left_shade=0.88,
+            right_shade=0.76,
+            face_scale=0.94,
+        )
+
+    @staticmethod
+    def _content_bbox(image):
+        try:
+            return image.convert("RGBA").getchannel("A").getbbox()
+        except Exception:
+            return None
+
+    @classmethod
+    def _fit_icon_to_size(cls, image, size, padding=0, smooth=False):
+        image = image.convert("RGBA")
+        try:
+            size = max(8, int(size))
+        except Exception:
+            size = 32
+        padding = max(0, int(padding))
+
+        bounds = cls._content_bbox(image)
+        if bounds is not None:
+            image = image.crop(bounds)
+
+        available = max(1, size - (padding * 2))
+        source_width = max(1, image.width)
+        source_height = max(1, image.height)
+        scale = min(
+            available / float(source_width),
+            available / float(source_height),
+        )
+        width = max(1, int(round(source_width * scale)))
+        height = max(1, int(round(source_height * scale)))
+        resize_filter = cls._smooth_filter() if smooth else cls._nearest_filter()
+        image = image.resize((width, height), resize_filter)
+
+        canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        canvas.alpha_composite(
+            image,
+            ((size - width) // 2, (size - height) // 2),
+        )
+        return canvas
+
+    @classmethod
+    def _render_compact_icon(cls, source, render_kind, size):
+        try:
+            size = max(12, int(size))
+        except Exception:
+            size = 34
+
+        source = source.convert("RGBA")
+        if render_kind == "flat":
+            source = cls._first_animation_frame(source)
+            bounds = cls._content_bbox(source)
+            if bounds is not None:
+                source = source.crop(bounds)
+
+            margin = max(2, int(round(size * 0.06)))
+            available = max(1, size - (margin * 2))
+            width = max(1, source.width)
+            height = max(1, source.height)
+            integer_scale = max(1, int(min(available / width, available / height)))
+            rendered_width = max(1, width * integer_scale)
+            rendered_height = max(1, height * integer_scale)
+            rendered = source.resize(
+                (rendered_width, rendered_height),
+                cls._nearest_filter(),
+            )
+            canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+            canvas.alpha_composite(
+                rendered,
+                (
+                    (size - rendered_width) // 2,
+                    (size - rendered_height) // 2,
+                ),
+            )
+            return canvas
+
+        return cls._fit_icon_to_size(
+            source,
+            size,
+            padding=max(2, int(round(size * 0.08))),
+            smooth=True,
+        )
+
+    @staticmethod
+    def _pil_to_bitmap(image):
+        image = image.convert("RGBA")
+        width, height = image.size
+        raw = image.tobytes()
+        try:
+            return wx.Bitmap.FromBufferRGBA(width, height, raw)
+        except Exception:
+            wx_image = wx.Image(width, height)
+            wx_image.SetData(image.convert("RGB").tobytes())
+            wx_image.SetAlpha(image.getchannel("A").tobytes())
+            return wx.Bitmap(wx_image)
+
+    def ensure_loaded(self):
+        if self._loaded:
+            return bool(self._base_icons)
+        self._loaded = True
+        if Image is None or ImageDraw is None:
+            return False
+        self._discover_resource_roots()
+        specs = self._model_specs()
+
+        unresolved = {}
+        three_dimensional_kinds = {
+            "cube_all",
+            "chest_entity",
+            "barrel_block",
+            "shulker_entity",
+        }
+        for choice, (render_kind, texture_reference) in specs.items():
+            texture = self._direct_texture(texture_reference)
+            top_texture = None
+            if render_kind == "barrel_block":
+                top_texture = self._direct_texture("minecraft:block/barrel_top")
+            if texture is None or (render_kind == "barrel_block" and top_texture is None):
+                unresolved[choice] = (render_kind, texture_reference)
+                continue
+            try:
+                if render_kind == "chest_entity":
+                    icon = self._render_chest_icon(texture)
+                elif render_kind == "barrel_block":
+                    icon = self._render_barrel_icon(texture, top_texture)
+                elif render_kind == "shulker_entity":
+                    icon = self._render_shulker_icon(texture)
+                elif render_kind == "cube_all":
+                    icon = self._render_cube_icon(texture)
+                else:
+                    icon = self._render_flat_icon(texture)
+                self._base_icons[choice] = icon
+                self._icon_sources[choice] = (
+                    "cube" if render_kind in three_dimensional_kinds else "flat",
+                    icon.copy()
+                    if render_kind in three_dimensional_kinds
+                    else texture.copy(),
+                )
+            except Exception:
+                unresolved[choice] = (render_kind, texture_reference)
+
+        atlas_image = None
+        atlas_mapping = {}
+        if unresolved:
+            atlas = self._select_atlas(unresolved)
+            if atlas is not None:
+                _json_path, png_path, atlas_mapping = atlas
+                try:
+                    with Image.open(png_path) as source:
+                        atlas_image = source.convert("RGBA")
+                except Exception:
+                    atlas_image = None
+                    atlas_mapping = {}
+
+        try:
+            if atlas_image is not None:
+                for choice, (render_kind, texture_reference) in unresolved.items():
+                    texture = self._atlas_texture(
+                        atlas_image,
+                        atlas_mapping,
+                        texture_reference,
+                    )
+                    top_texture = None
+                    if render_kind == "barrel_block":
+                        top_texture = self._atlas_texture(
+                            atlas_image,
+                            atlas_mapping,
+                            "minecraft:block/barrel_top",
+                        )
+                    if texture is None or (render_kind == "barrel_block" and top_texture is None):
+                        continue
+                    try:
+                        if render_kind == "chest_entity":
+                            icon = self._render_chest_icon(texture)
+                        elif render_kind == "barrel_block":
+                            icon = self._render_barrel_icon(texture, top_texture)
+                        elif render_kind == "shulker_entity":
+                            icon = self._render_shulker_icon(texture)
+                        elif render_kind == "cube_all":
+                            icon = self._render_cube_icon(texture)
+                        else:
+                            icon = self._render_flat_icon(texture)
+                        self._base_icons[choice] = icon
+                        self._icon_sources[choice] = (
+                            "cube" if render_kind in three_dimensional_kinds else "flat",
+                            icon.copy()
+                            if render_kind in three_dimensional_kinds
+                            else texture.copy(),
+                        )
+                    except Exception:
+                        continue
+        finally:
+            try:
+                if atlas_image is not None:
+                    atlas_image.close()
+            except Exception:
+                pass
+
+        self._add_shulker_color_swatches()
+        return bool(self._base_icons)
+
+    def _add_shulker_color_swatches(self):
+        if Image is None or ImageDraw is None:
+            return
+        for choice, rgb in SHULKER_COLOR_RGB.items():
+            if choice in self._base_icons:
+                continue
+            try:
+                base = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(base)
+                red, green, blue = rgb
+                top = (
+                    min(255, int(red * 1.18)),
+                    min(255, int(green * 1.18)),
+                    min(255, int(blue * 1.18)),
+                    255,
+                )
+                left = (max(0, int(red * 0.82)), max(0, int(green * 0.82)), max(0, int(blue * 0.82)), 255)
+                right = (max(0, int(red * 0.66)), max(0, int(green * 0.66)), max(0, int(blue * 0.66)), 255)
+                outline = (31, 24, 37, 255)
+                draw.polygon(((32, 7), (55, 19), (32, 31), (9, 19)), fill=top, outline=outline)
+                draw.polygon(((9, 19), (32, 31), (32, 56), (9, 44)), fill=left, outline=outline)
+                draw.polygon(((32, 31), (55, 19), (55, 44), (32, 56)), fill=right, outline=outline)
+                draw.line(((10, 31), (32, 43), (54, 31)), fill=outline, width=2)
+                self._base_icons[choice] = base
+                self._icon_sources[choice] = ("cube", base.copy())
+            except Exception:
+                continue
+
+        default_icon = self._base_icons.get("default")
+        if default_icon is not None and "Shulker Box" not in self._base_icons:
+            self._base_icons["Shulker Box"] = default_icon.copy()
+            self._icon_sources["Shulker Box"] = ("cube", default_icon.copy())
+
+    def available_count(self):
+        self.ensure_loaded()
+        return len(self._base_icons)
+
+    def get_bitmap(self, choice, size, padding=0):
+        self.ensure_loaded()
+        choice = _storage_icon_choice_key(choice)
+        try:
+            size = max(8, int(size))
+        except Exception:
+            size = 32
+        try:
+            padding = max(0, int(padding))
+        except Exception:
+            padding = 0
+        key = (choice, size, padding)
+        if key in self._bitmap_cache:
+            return self._bitmap_cache[key]
+        image = self._base_icons.get(choice)
+        if image is None:
+            return wx.NullBitmap
+        source_entry = self._icon_sources.get(choice)
+        smooth = bool(source_entry and source_entry[0] == "cube")
+        image = self._fit_icon_to_size(
+            image,
+            size,
+            padding=padding,
+            smooth=smooth,
+        )
+        bitmap = self._pil_to_bitmap(image)
+        self._bitmap_cache[key] = bitmap
+        return bitmap
+
+    def get_compact_bitmap(self, choice, size):
+        self.ensure_loaded()
+        choice = _storage_icon_choice_key(choice)
+        try:
+            size = max(12, int(size))
+        except Exception:
+            size = 34
+        key = (choice, size)
+        if key in self._compact_bitmap_cache:
+            return self._compact_bitmap_cache[key]
+
+        source_entry = self._icon_sources.get(choice)
+        if source_entry is None:
+            return self.get_bitmap(choice, size, padding=2)
+        render_kind, source = source_entry
+        try:
+            image = self._render_compact_icon(source, render_kind, size)
+            bitmap = self._pil_to_bitmap(image)
+        except Exception:
+            return self.get_bitmap(choice, size, padding=2)
+        self._compact_bitmap_cache[key] = bitmap
+        return bitmap
+
+def _rounded_scanline_inset(width, height, radius, y):
+    width = max(1, int(width))
+    height = max(1, int(height))
+    radius = max(1, min(int(radius), width // 2, height // 2))
+    y = int(y)
+
+    if y < radius:
+        vertical = radius - (y + 0.5)
+    elif y >= height - radius:
+        vertical = (y + 0.5) - (height - radius)
+    else:
+        return 0
+
+    remaining = max(0.0, float(radius * radius) - vertical * vertical)
+    inset = int(max(0.0, radius - remaining ** 0.5) + 0.999)
+    return min(radius, inset)
+
+class RoundedPanel(wx.Panel):
+
+    def __init__(
+        self,
+        parent,
+        background=None,
+        border=None,
+        radius=12,
+        clear_background=None,
+    ):
+        super().__init__(
+            parent,
+            style=(
+                wx.BORDER_NONE
+                | wx.FULL_REPAINT_ON_RESIZE
+                | wx.CLIP_CHILDREN
+            ),
+        )
+        _mark_custom_ui_owned(self)
+        self._fill = background or BLOCKS_TO_STORAGE_THEME["surface"]
+        self._border = border or BLOCKS_TO_STORAGE_THEME["border_soft"]
+        self._radius = radius
+
+        self._clear_background = clear_background
+        self.SetBackgroundColour(self._fill)
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.Bind(wx.EVT_PAINT, self._on_paint)
+        self.Bind(wx.EVT_SIZE, lambda event: (self.Refresh(False), event.Skip()))
+
+    def _on_paint(self, _event):
+        dc = wx.AutoBufferedPaintDC(self)
+        clear_colour = self._clear_background or _parent_background(self)
+        dc.SetBackground(wx.Brush(clear_colour))
+        dc.Clear()
+        size = self.GetClientSize()
+        if size.width <= 1 or size.height <= 1:
+            return
+
+        radius = max(1, _dip(self, self._radius))
+        if self._clear_background is not None:
+
+            width = int(size.width)
+            height = int(size.height)
+
+            dc.SetPen(wx.Pen(self._border, 1))
+            dc.SetBrush(wx.Brush(self._border))
+            for y in range(height):
+                outer_inset = _rounded_scanline_inset(
+                    width,
+                    height,
+                    radius,
+                    y,
+                )
+                row_width = width - outer_inset * 2
+                if row_width > 0:
+                    dc.DrawRectangle(
+                        outer_inset,
+                        y,
+                        row_width,
+                        1,
+                    )
+
+            border_width = max(1, int(TOOLTIP_BORDER_WIDTH))
+            inner_x = border_width
+            inner_y = border_width
+            inner_width = max(1, width - border_width * 2)
+            inner_height = max(1, height - border_width * 2)
+            inner_radius = max(1, radius - border_width)
+
+            dc.SetPen(wx.Pen(self._fill, 1))
+            dc.SetBrush(wx.Brush(self._fill))
+            for local_y in range(inner_height):
+                inner_inset = _rounded_scanline_inset(
+                    inner_width,
+                    inner_height,
+                    inner_radius,
+                    local_y,
+                )
+                row_width = inner_width - inner_inset * 2
+                if row_width > 0:
+                    dc.DrawRectangle(
+                        inner_x + inner_inset,
+                        inner_y + local_y,
+                        row_width,
+                        1,
+                    )
+            return
+
+        gc = wx.GraphicsContext.Create(dc)
+        if gc is None:
+            return
+        gc.SetPen(wx.Pen(self._border, 1))
+        gc.SetBrush(wx.Brush(self._fill))
+        inset = 0.5
+        gc.DrawRoundedRectangle(
+            inset,
+            inset,
+            max(1, size.width - 1),
+            max(1, size.height - 1),
+            radius,
+        )
+
+class ModernButton(wx.Control):
+
+    def __init__(
+        self,
+        parent,
+        label,
+        primary=False,
+        compact=False,
+        content_alignment="center",
+        trailing_chevron=False,
+    ):
+        super().__init__(
+            parent,
+            style=(
+                wx.BORDER_NONE
+                | wx.WANTS_CHARS
+                | wx.FULL_REPAINT_ON_RESIZE
+            ),
+        )
+        _mark_custom_ui_owned(self)
+        self._label = str(label)
+        self._primary = bool(primary)
+        self._hovered = False
+        self._pressed = False
+
+        self._busy = False
+
+        self._available = True
+        self._protect_from_external_disable = False
+        self._compact = bool(compact)
+        self._content_alignment = str(content_alignment)
+        self._trailing_chevron = bool(trailing_chevron)
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.SetCursor(wx.Cursor(wx.CURSOR_HAND))
+        self.SetMinSize((-1, _dip(self, 34 if compact else 40)))
+        self.Bind(wx.EVT_PAINT, self._on_paint)
+        self.Bind(wx.EVT_ENTER_WINDOW, self._on_enter)
+        self.Bind(wx.EVT_LEAVE_WINDOW, self._on_leave)
+        self.Bind(wx.EVT_LEFT_DOWN, self._on_left_down)
+        self.Bind(wx.EVT_LEFT_UP, self._on_left_up)
+        self.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
+        self.Bind(wx.EVT_SET_FOCUS, lambda event: (self.Refresh(False), event.Skip()))
+        self.Bind(wx.EVT_KILL_FOCUS, lambda event: (self.Refresh(False), event.Skip()))
+        self.Bind(wx.EVT_SIZE, lambda event: (self.Refresh(False), event.Skip()))
+
+    def SetLabel(self, label):
+        self._label = str(label)
+        self.Refresh(False)
+
+    def GetLabel(self):
+        return self._label
+
+    def DoGetBestClientSize(self):
+        dc = wx.ClientDC(self)
+        dc.SetFont(self.GetFont())
+        width, height = dc.GetTextExtent(self._label)
+        return wx.Size(width + _dip(self, 34), max(height + _dip(self, 16), _dip(self, 34 if self._compact else 40)))
+
+    def ProtectFromExternalDisable(self, protect=True):
+        self._protect_from_external_disable = bool(protect)
+        try:
+            wx.Control.Enable(self, True)
+        except Exception:
+            pass
+        self._update_cursor()
+        self.Refresh(False)
+
+    def SetAvailable(self, available=True):
+        self._available = bool(available)
+        if not self._available:
+            self._pressed = False
+        try:
+            wx.Control.Enable(self, True)
+        except Exception:
+            try:
+                super().Enable(True)
+            except Exception:
+                pass
+        self._update_cursor()
+        self.Refresh(False)
+        return self._available
+
+    def IsAvailable(self):
+        return bool(self._available)
+
+    def Enable(self, enable=True):
+
+        if self._protect_from_external_disable and not bool(enable):
+            try:
+                wx.Control.Enable(self, True)
+            except Exception:
+                pass
+            self._update_cursor()
+            self.Refresh(False)
+            return True
+        return self.SetAvailable(enable)
+
+    def SetBusy(self, busy=True):
+        self._busy = bool(busy)
+        if not self._busy:
+            self._pressed = False
+        try:
+            wx.Control.Enable(self, True)
+        except Exception:
+            pass
+        self._update_cursor()
+        self.Refresh(False)
+
+    def IsBusy(self):
+        return bool(self._busy)
+
+    def _update_cursor(self):
+        interactive = self._available and not self._busy
+        try:
+            self.SetCursor(
+                wx.Cursor(wx.CURSOR_HAND if interactive else wx.CURSOR_ARROW)
+            )
+        except Exception:
+            pass
+
+    def _colors(self):
+        enabled = self._available
+        if not enabled or self._busy:
+            return BLOCKS_TO_STORAGE_THEME["surface_alt"], BLOCKS_TO_STORAGE_THEME["disabled"], BLOCKS_TO_STORAGE_THEME["border_soft"]
+        if self._primary:
+            if self._pressed:
+                fill = BLOCKS_TO_STORAGE_THEME["accent_pressed"]
+            elif self._hovered:
+                fill = BLOCKS_TO_STORAGE_THEME["accent_hover"]
+            else:
+                fill = BLOCKS_TO_STORAGE_THEME["accent"]
+            return fill, BLOCKS_TO_STORAGE_THEME["text"], fill
+        if self._pressed:
+            fill = BLOCKS_TO_STORAGE_THEME["surface_pressed"]
+        elif self._hovered:
+            fill = BLOCKS_TO_STORAGE_THEME["surface_hover"]
+        else:
+            fill = BLOCKS_TO_STORAGE_THEME["surface_alt"]
+        return fill, BLOCKS_TO_STORAGE_THEME["text"], BLOCKS_TO_STORAGE_THEME["border"]
+
+    def _on_paint(self, _event):
+        dc = wx.AutoBufferedPaintDC(self)
+        dc.SetBackground(wx.Brush(_parent_background(self)))
+        dc.Clear()
+        size = self.GetClientSize()
+        if size.width <= 1 or size.height <= 1:
+            return
+        fill, text_color, border = self._colors()
+        gc = wx.GraphicsContext.Create(dc)
+        if gc is None:
+            return
+        gc.SetPen(wx.Pen(border, 1))
+        gc.SetBrush(wx.Brush(fill))
+        gc.DrawRoundedRectangle(0.5, 0.5, max(1, size.width - 1), max(1, size.height - 1), _dip(self, 9))
+        gc.SetFont(self.GetFont(), text_color)
+        text_width, text_height = _graphics_text_size(gc, self._label)
+        if self._content_alignment == "left":
+            text_x = _dip(self, 12)
+        else:
+            text_x = (size.width - text_width) / 2
+        gc.DrawText(
+            self._label,
+            text_x,
+            (size.height - text_height) / 2,
+        )
+
+        if self._trailing_chevron:
+            arrow_x = size.width - _dip(self, 18)
+            arrow_y = size.height / 2
+            gc.SetPen(wx.Pen(text_color, 2))
+            gc.StrokeLine(
+                arrow_x - _dip(self, 4),
+                arrow_y - _dip(self, 2),
+                arrow_x,
+                arrow_y + _dip(self, 2),
+            )
+            gc.StrokeLine(
+                arrow_x,
+                arrow_y + _dip(self, 2),
+                arrow_x + _dip(self, 4),
+                arrow_y - _dip(self, 2),
+            )
+
+        if self.HasFocus() and self._available and not self._busy:
+            gc.SetPen(wx.Pen(BLOCKS_TO_STORAGE_THEME["accent_hover"], 1))
+            gc.SetBrush(wx.TRANSPARENT_BRUSH)
+            gc.DrawRoundedRectangle(2.5, 2.5, max(1, size.width - 5), max(1, size.height - 5), _dip(self, 7))
+
+    def _on_enter(self, event):
+        self._hovered = True
+        self.Refresh(False)
+        event.Skip()
+
+    def _on_leave(self, event):
+        self._hovered = False
+        if not self.HasCapture():
+            self._pressed = False
+        self.Refresh(False)
+        event.Skip()
+
+    def _on_left_down(self, event):
+        if not self._available or self._busy:
+            return
+        self.SetFocus()
+        self._pressed = True
+        try:
+            self.CaptureMouse()
+        except Exception:
+            pass
+        self.Refresh(False)
+
+    def _on_left_up(self, event):
+        if not self._available or self._busy:
+            return
+        was_pressed = self._pressed
+        self._pressed = False
+        try:
+            if self.HasCapture():
+                self.ReleaseMouse()
+        except Exception:
+            pass
+        self.Refresh(False)
+        if was_pressed and self.GetClientRect().Contains(event.GetPosition()):
+            _emit_command_event(self, wx.EVT_BUTTON)
+
+    def _on_key_down(self, event):
+        if self._available and not self._busy and event.GetKeyCode() in (wx.WXK_SPACE, wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
+            _emit_command_event(self, wx.EVT_BUTTON)
+            return
+        event.Skip()
+
+class ModernCheckBox(wx.Control):
+
+    def __init__(self, parent, label, value=False):
+        super().__init__(parent, style=wx.BORDER_NONE | wx.WANTS_CHARS | wx.FULL_REPAINT_ON_RESIZE)
+        _mark_custom_ui_owned(self)
+        self._label = str(label)
+        self._value = bool(value)
+        self._hovered = False
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.SetCursor(wx.Cursor(wx.CURSOR_HAND))
+        self.SetMinSize((-1, _dip(self, UI_CHECKBOX_HEIGHT)))
+        self.Bind(wx.EVT_PAINT, self._on_paint)
+        self.Bind(wx.EVT_ENTER_WINDOW, self._on_enter)
+        self.Bind(wx.EVT_LEAVE_WINDOW, self._on_leave)
+        self.Bind(wx.EVT_LEFT_UP, self._on_activate)
+        self.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
+        self.Bind(wx.EVT_SET_FOCUS, lambda event: (self.Refresh(False), event.Skip()))
+        self.Bind(wx.EVT_KILL_FOCUS, lambda event: (self.Refresh(False), event.Skip()))
+        self.Bind(wx.EVT_SIZE, lambda event: (self.Refresh(False), event.Skip()))
+
+    def SetLabel(self, label):
+        self._label = str(label)
+        self.Refresh(False)
+
+    def GetLabel(self):
+        return self._label
+
+    def GetValue(self):
+        return bool(self._value)
+
+    def SetValue(self, value):
+        self._value = bool(value)
+        self.Refresh(False)
+
+    def DoGetBestClientSize(self):
+        dc = wx.ClientDC(self)
+        dc.SetFont(self.GetFont())
+        width, height = dc.GetTextExtent(self._label)
+        width_overhead = (
+            _dip(self, UI_CHECKBOX_LEFT_PADDING)
+            + _dip(self, UI_CHECKBOX_BOX_SIZE)
+            + _dip(self, UI_CHECKBOX_LABEL_GAP)
+            + _dip(self, UI_CHECKBOX_RIGHT_PADDING)
+        )
+        return wx.Size(
+            width + width_overhead,
+            max(
+                height + _dip(self, UI_CHECKBOX_TEXT_VERTICAL_PADDING),
+                _dip(self, UI_CHECKBOX_HEIGHT),
+            ),
+        )
+
+    def Enable(self, enable=True):
+        result = super().Enable(enable)
+        self.SetCursor(wx.Cursor(wx.CURSOR_HAND if enable else wx.CURSOR_ARROW))
+        self.Refresh(False)
+        return result
+
+    def Show(self, show=True):
+        result = super().Show(show)
+        _schedule_checkbox_spacing_refresh()
+        return result
+
+    def _on_paint(self, _event):
+        dc = wx.AutoBufferedPaintDC(self)
+        dc.SetBackground(wx.Brush(_parent_background(self)))
+        dc.Clear()
+        size = self.GetClientSize()
+        box_size = _dip(self, UI_CHECKBOX_BOX_SIZE)
+        box_x = _dip(self, UI_CHECKBOX_LEFT_PADDING)
+        box_y = max(0, (size.height - box_size) / 2)
+        enabled = self.IsEnabled()
+        fill = BLOCKS_TO_STORAGE_THEME["accent"] if self._value and enabled else BLOCKS_TO_STORAGE_THEME["surface_alt"]
+        if self._hovered and enabled and not self._value:
+            fill = BLOCKS_TO_STORAGE_THEME["surface_hover"]
+        border = BLOCKS_TO_STORAGE_THEME["accent_hover"] if self.HasFocus() and enabled else BLOCKS_TO_STORAGE_THEME["border"]
+        text_color = BLOCKS_TO_STORAGE_THEME["text"] if enabled else BLOCKS_TO_STORAGE_THEME["disabled"]
+        gc = wx.GraphicsContext.Create(dc)
+        if gc is None:
+            return
+        gc.SetPen(wx.Pen(border, 1))
+        gc.SetBrush(wx.Brush(fill))
+        gc.DrawRoundedRectangle(box_x + 0.5, box_y + 0.5, box_size - 1, box_size - 1, _dip(self, 4))
+        if self._value:
+            gc.SetPen(wx.Pen(BLOCKS_TO_STORAGE_THEME["text"], max(2, _dip(self, 2))))
+            gc.StrokeLine(box_x + box_size * 0.25, box_y + box_size * 0.52, box_x + box_size * 0.43, box_y + box_size * 0.70)
+            gc.StrokeLine(box_x + box_size * 0.43, box_y + box_size * 0.70, box_x + box_size * 0.76, box_y + box_size * 0.31)
+        gc.SetFont(self.GetFont(), text_color)
+        _tw, th = _graphics_text_size(gc, self._label)
+        gc.DrawText(
+            self._label,
+            box_x
+            + box_size
+            + _dip(self, UI_CHECKBOX_LABEL_GAP),
+            (size.height - th) / 2,
+        )
+
+    def _on_enter(self, event):
+        self._hovered = True
+        self.Refresh(False)
+        event.Skip()
+
+    def _on_leave(self, event):
+        self._hovered = False
+        self.Refresh(False)
+        event.Skip()
+
+    def _toggle(self):
+        if not self.IsEnabled():
+            return
+        self._value = not self._value
+        self.Refresh(False)
+        _emit_command_event(self, wx.EVT_CHECKBOX)
+
+    def _on_activate(self, _event):
+        self.SetFocus()
+        self._toggle()
+
+    def _on_key_down(self, event):
+        if event.GetKeyCode() in (wx.WXK_SPACE, wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
+            self._toggle()
+            return
+        event.Skip()
+
+class ModernSlider(wx.Control):
+
+    def __init__(self, parent, value, minValue, maxValue):
+        super().__init__(parent, style=wx.BORDER_NONE | wx.WANTS_CHARS | wx.FULL_REPAINT_ON_RESIZE)
+        _mark_custom_ui_owned(self)
+        self._minimum = int(minValue)
+        self._maximum = max(self._minimum, int(maxValue))
+        self._value = max(self._minimum, min(self._maximum, int(value)))
+        self._dragging = False
+        self._hovered = False
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.SetCursor(wx.Cursor(wx.CURSOR_HAND))
+        self.SetMinSize((_dip(self, 180), _dip(self, 30)))
+        self.Bind(wx.EVT_PAINT, self._on_paint)
+        self.Bind(wx.EVT_ENTER_WINDOW, self._on_enter)
+        self.Bind(wx.EVT_LEAVE_WINDOW, self._on_leave)
+        self.Bind(wx.EVT_LEFT_DOWN, self._on_left_down)
+        self.Bind(wx.EVT_MOTION, self._on_motion)
+        self.Bind(wx.EVT_LEFT_UP, self._on_left_up)
+        self.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
+        self.Bind(wx.EVT_SET_FOCUS, lambda event: (self.Refresh(False), event.Skip()))
+        self.Bind(wx.EVT_KILL_FOCUS, lambda event: (self.Refresh(False), event.Skip()))
+        self.Bind(wx.EVT_SIZE, lambda event: (self.Refresh(False), event.Skip()))
+
+    def GetValue(self):
+        return int(self._value)
+
+    def SetValue(self, value):
+        value = max(self._minimum, min(self._maximum, int(value)))
+        if value != self._value:
+            self._value = value
+            self.Refresh(False)
+
+    def GetMin(self):
+        return int(self._minimum)
+
+    def GetMax(self):
+        return int(self._maximum)
+
+    def _track_bounds(self):
+        size = self.GetClientSize()
+        margin = _dip(self, 10)
+        return margin, max(margin + 1, size.width - margin)
+
+    def _value_from_x(self, x):
+        start, end = self._track_bounds()
+        if end <= start or self._maximum <= self._minimum:
+            return self._minimum
+        ratio = max(0.0, min(1.0, (float(x) - start) / (end - start)))
+        return int(round(self._minimum + ratio * (self._maximum - self._minimum)))
+
+    def _set_from_x(self, x, emit=True):
+        new_value = self._value_from_x(x)
+        if new_value == self._value:
+            return
+        self._value = new_value
+        self.Refresh(False)
+        if emit:
+            _emit_command_event(self, wx.EVT_SLIDER)
+
+    def _on_paint(self, _event):
+        dc = wx.AutoBufferedPaintDC(self)
+        dc.SetBackground(wx.Brush(_parent_background(self)))
+        dc.Clear()
+        size = self.GetClientSize()
+        if size.width <= 1 or size.height <= 1:
+            return
+        start, end = self._track_bounds()
+        center_y = size.height / 2
+        ratio = 0.0 if self._maximum == self._minimum else (self._value - self._minimum) / (self._maximum - self._minimum)
+        knob_x = start + ratio * (end - start)
+        track_height = _dip(self, 5)
+        knob_radius = _dip(self, 7 if self._dragging or self._hovered else 6)
+        gc = wx.GraphicsContext.Create(dc)
+        if gc is None:
+            return
+        gc.SetPen(wx.TRANSPARENT_PEN)
+        gc.SetBrush(wx.Brush(BLOCKS_TO_STORAGE_THEME["border_soft"]))
+        gc.DrawRoundedRectangle(start, center_y - track_height / 2, max(1, end - start), track_height, track_height / 2)
+        gc.SetBrush(wx.Brush(BLOCKS_TO_STORAGE_THEME["accent"] if self.IsEnabled() else BLOCKS_TO_STORAGE_THEME["disabled"]))
+        gc.DrawRoundedRectangle(start, center_y - track_height / 2, max(1, knob_x - start), track_height, track_height / 2)
+        gc.SetPen(wx.Pen(BLOCKS_TO_STORAGE_THEME["accent_hover"] if self.HasFocus() else BLOCKS_TO_STORAGE_THEME["border"], 1))
+        gc.SetBrush(wx.Brush(BLOCKS_TO_STORAGE_THEME["accent_hover"] if self._hovered and self.IsEnabled() else BLOCKS_TO_STORAGE_THEME["accent"]))
+        gc.DrawEllipse(knob_x - knob_radius, center_y - knob_radius, knob_radius * 2, knob_radius * 2)
+
+    def _on_enter(self, event):
+        self._hovered = True
+        self.Refresh(False)
+        event.Skip()
+
+    def _on_leave(self, event):
+        self._hovered = False
+        if not self._dragging:
+            self.Refresh(False)
+        event.Skip()
+
+    def _on_left_down(self, event):
+        if not self.IsEnabled():
+            return
+        self.SetFocus()
+        self._dragging = True
+        try:
+            self.CaptureMouse()
+        except Exception:
+            pass
+        self._set_from_x(event.GetX(), emit=True)
+
+    def _on_motion(self, event):
+        if self._dragging and event.Dragging() and event.LeftIsDown():
+            self._set_from_x(event.GetX(), emit=True)
+        else:
+            event.Skip()
+
+    def _on_left_up(self, event):
+        if not self._dragging:
+            return
+        self._dragging = False
+        self._set_from_x(event.GetX(), emit=True)
+        try:
+            if self.HasCapture():
+                self.ReleaseMouse()
+        except Exception:
+            pass
+        self.Refresh(False)
+
+    def _on_key_down(self, event):
+        if not self.IsEnabled():
+            event.Skip()
+            return
+        key = event.GetKeyCode()
+        target = self._value
+        if key in (wx.WXK_LEFT, wx.WXK_DOWN):
+            target -= 1
+        elif key in (wx.WXK_RIGHT, wx.WXK_UP):
+            target += 1
+        elif key == wx.WXK_HOME:
+            target = self._minimum
+        elif key == wx.WXK_END:
+            target = self._maximum
+        else:
+            event.Skip()
+            return
+        old = self._value
+        self.SetValue(target)
+        if self._value != old:
+            _emit_command_event(self, wx.EVT_SLIDER)
+
+class ModernScrollViewport(wx.Panel):
+
+    def __init__(self, parent, background=None):
+        super().__init__(
+            parent,
+            style=wx.BORDER_NONE | wx.CLIP_CHILDREN | wx.FULL_REPAINT_ON_RESIZE,
+        )
+        _mark_custom_ui_owned(self)
+        self._background = background or BLOCKS_TO_STORAGE_THEME["window"]
+        self.SetBackgroundColour(self._background)
+        try:
+            self.SetDoubleBuffered(True)
+        except Exception:
+            pass
+
+        self._content = wx.Panel(
+            self,
+            style=wx.BORDER_NONE | wx.CLIP_CHILDREN,
+        )
+        _mark_custom_ui_owned(self._content)
+        self._content.SetBackgroundColour(self._background)
+        self._content_sizer = None
+        self._offset = 0.0
+        self._content_height = 1
+
+        self.Bind(wx.EVT_SIZE, self._on_size)
+
+    def GetContentWindow(self):
+        return self._content
+
+    def SetContentSizer(self, sizer):
+        self._content_sizer = sizer
+        self._content.SetSizer(sizer)
+        self._modern_sync_layout()
+
+    def _modern_sync_layout(self):
+        try:
+            client = self.GetClientSize()
+            width = max(1, int(client.width))
+            viewport_height = max(1, int(client.height))
+        except Exception:
+            return
+
+        sizer = self._content_sizer
+        if sizer is None:
+            content_height = viewport_height
+        else:
+            try:
+
+                current_height = max(1, int(self._content.GetSize().height))
+                self._content.SetSize((width, current_height))
+                self._content.Layout()
+                minimum = sizer.CalcMin()
+                content_height = max(viewport_height, int(minimum.height))
+            except Exception:
+                content_height = viewport_height
+
+        self._content_height = max(1, content_height)
+        try:
+            self._content.SetSize((width, self._content_height))
+            self._content.Layout()
+        except Exception:
+            pass
+
+        maximum = max(0.0, float(self._content_height - viewport_height))
+        self._offset = max(0.0, min(float(self._offset), maximum))
+        try:
+            self._content.SetPosition((0, -int(round(self._offset))))
+        except Exception:
+            pass
+        try:
+            self.Refresh(False)
+        except Exception:
+            pass
+
+    def _modern_scroll_metrics(self):
+        try:
+            viewport = max(1, int(self.GetClientSize().height))
+        except Exception:
+            viewport = 1
+        content = max(viewport, int(self._content_height))
+        maximum = max(0.0, float(content - viewport))
+        offset = max(0.0, min(float(self._offset), maximum))
+        return offset, float(viewport), float(content), maximum, 1
+
+    def _modern_scroll_to_pixel(self, offset, refresh=True):
+        _old, _viewport, _content, maximum, _ppu = self._modern_scroll_metrics()
+        offset = max(0.0, min(float(offset), maximum))
+        if abs(offset - self._offset) < 0.5:
+            return
+        self._offset = offset
+        try:
+
+            self._content.SetPosition((0, -int(round(offset))))
+        except Exception:
+            return
+        if refresh:
+            try:
+                self.Refresh(False)
+            except Exception:
+                pass
+
+    def ScrollChildIntoView(self, child, margin=4):
+        if child is None:
+            return
+        try:
+            content_screen = self._content.ClientToScreen((0, 0))
+            child_screen = child.ClientToScreen((0, 0))
+            child_top = float(child_screen.y - content_screen.y)
+            child_bottom = child_top + float(child.GetSize().height)
+            viewport_height = float(max(1, self.GetClientSize().height))
+            margin = float(max(0, _dip(self, margin)))
+        except Exception:
+            return
+
+        offset, _viewport, _content, maximum, _ppu = self._modern_scroll_metrics()
+        target = offset
+        if child_top - margin < offset:
+            target = child_top - margin
+        elif child_bottom + margin > offset + viewport_height:
+            target = child_bottom + margin - viewport_height
+        self._modern_scroll_to_pixel(max(0.0, min(target, maximum)))
+
+    def _on_size(self, event):
+        try:
+            event.Skip()
+        except Exception:
+            pass
+        try:
+            wx.CallAfter(self._modern_sync_layout)
+        except Exception:
+            self._modern_sync_layout()
+
+class ModernScrollBar(wx.Control):
+
+    def __init__(self, parent, target, on_scrolled=None):
+        super().__init__(
+            parent,
+            style=wx.BORDER_NONE | wx.FULL_REPAINT_ON_RESIZE,
+        )
+        _mark_custom_ui_owned(self)
+        self._target_ref = weakref.ref(target)
+        self._on_scrolled = on_scrolled
+        self._hovered = False
+        self._dragging = False
+        self._drag_offset = 0.0
+        self._drag_mouse_y = None
+        self._drag_timer = wx.Timer(self)
+        self._wheel_remainder = 0.0
+        self._wheel_pixels = float(_dip(target, 36))
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.SetMinSize((_dip(self, UI_SCROLLBAR_WIDTH), -1))
+        self.SetMaxSize((_dip(self, UI_SCROLLBAR_WIDTH), -1))
+        self.SetCursor(wx.Cursor(wx.CURSOR_HAND))
+
+        self.Bind(wx.EVT_PAINT, self._on_paint)
+        self.Bind(wx.EVT_ENTER_WINDOW, self._on_enter)
+        self.Bind(wx.EVT_LEAVE_WINDOW, self._on_leave)
+        self.Bind(wx.EVT_LEFT_DOWN, self._on_left_down)
+        self.Bind(wx.EVT_MOTION, self._on_motion)
+        self.Bind(wx.EVT_LEFT_UP, self._on_left_up)
+        self.Bind(wx.EVT_TIMER, self._on_drag_timer, self._drag_timer)
+        self.Bind(wx.EVT_MOUSE_CAPTURE_LOST, self._on_capture_lost)
+        self.Bind(
+            wx.EVT_SIZE,
+            lambda event: (self.Refresh(False), event.Skip()),
+        )
+
+        self._wheel_bound_windows = weakref.WeakSet()
+        self._bind_wheel_tree(target)
+        target.Bind(wx.EVT_SIZE, self._on_target_size)
+
+    def _target(self):
+        try:
+            return self._target_ref()
+        except Exception:
+            return None
+
+    def _bind_wheel_tree(self, root):
+        pending = [root]
+        seen = set()
+        while pending:
+            window = pending.pop()
+            if window is None or id(window) in seen:
+                continue
+            seen.add(id(window))
+            try:
+                already_bound = window in self._wheel_bound_windows
+            except Exception:
+                already_bound = True
+            if not already_bound:
+                try:
+                    self._wheel_bound_windows.add(window)
+                    window.Bind(wx.EVT_MOUSEWHEEL, self._on_target_mousewheel)
+                except Exception:
+                    pass
+            try:
+                pending.extend(window.GetChildren())
+            except Exception:
+                pass
+
+    def _metrics(self):
+        target = self._target()
+        if target is None:
+            return 0.0, 1.0, 1.0, 0.0, 1
+        try:
+            return target._modern_scroll_metrics()
+        except Exception:
+            return 0.0, 1.0, 1.0, 0.0, 1
+
+    def _thumb_geometry(self):
+        size = self.GetClientSize()
+        track_top = float(_dip(self, 3))
+        track_height = max(1.0, float(size.height) - track_top * 2.0)
+        offset, viewport, content, maximum, _pixels_per_unit = self._metrics()
+        if maximum <= 0.0 or content <= viewport:
+            return track_top, track_height, track_top, track_height, maximum
+        min_thumb = float(_dip(self, 30))
+        thumb_height = max(min_thumb, track_height * (viewport / content))
+        thumb_height = min(track_height, thumb_height)
+        movable = max(1.0, track_height - thumb_height)
+        thumb_top = track_top + movable * (offset / maximum)
+        return track_top, track_height, thumb_top, thumb_height, maximum
+
+    def _scroll_to_pixel(self, offset):
+        target = self._target()
+        if target is None:
+            return
+        _current, _viewport, _content, maximum, _pixels_per_unit = self._metrics()
+        offset = max(0.0, min(float(offset), maximum))
+        try:
+            target._modern_scroll_to_pixel(
+                offset,
+                refresh=not self._dragging,
+            )
+        except Exception:
+            return
+
+        self.Refresh(False)
+
+    def _notify_scrolled(self):
+        self.Refresh(False)
+        callback = self._on_scrolled
+        if callback is None:
+            return
+        try:
+            callback()
+        except TypeError:
+            try:
+                callback(None)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def sync(self):
+        target = self._target()
+        if target is None:
+            return
+        try:
+            target._modern_sync_layout()
+        except Exception:
+            pass
+        self._bind_wheel_tree(target)
+        try:
+            self.Refresh(False)
+        except Exception:
+            pass
+
+    def _on_paint(self, _event):
+        dc = wx.AutoBufferedPaintDC(self)
+        dc.SetBackground(wx.Brush(_parent_background(self)))
+        dc.Clear()
+        size = self.GetClientSize()
+        if size.width <= 1 or size.height <= 1:
+            return
+
+        track_top, track_height, thumb_top, thumb_height, maximum = (
+            self._thumb_geometry()
+        )
+        gc = wx.GraphicsContext.Create(dc)
+        if gc is None:
+            return
+
+        track_width = float(_dip(self, 5))
+        track_x = (float(size.width) - track_width) / 2.0
+        gc.SetPen(wx.TRANSPARENT_PEN)
+        gc.SetBrush(wx.Brush(BLOCKS_TO_STORAGE_THEME["surface_alt"]))
+        gc.DrawRoundedRectangle(
+            track_x,
+            track_top,
+            track_width,
+            track_height,
+            track_width / 2.0,
+        )
+        if maximum <= 0.0:
+            return
+
+        thumb_width = float(
+            _dip(self, 7 if self._hovered or self._dragging else 6)
+        )
+        thumb_x = (float(size.width) - thumb_width) / 2.0
+        thumb_color = (
+            BLOCKS_TO_STORAGE_THEME["accent_hover"]
+            if self._dragging
+            else BLOCKS_TO_STORAGE_THEME["accent"]
+            if self._hovered
+            else BLOCKS_TO_STORAGE_THEME["border"]
+        )
+        gc.SetBrush(wx.Brush(thumb_color))
+        gc.DrawRoundedRectangle(
+            thumb_x,
+            thumb_top,
+            thumb_width,
+            thumb_height,
+            thumb_width / 2.0,
+        )
+
+    def _on_enter(self, event):
+        self._hovered = True
+        self.Refresh(False)
+        event.Skip()
+
+    def _on_leave(self, event):
+        self._hovered = False
+        if not self._dragging:
+            self.Refresh(False)
+        event.Skip()
+
+    def _on_left_down(self, event):
+        _track_top, _track_height, thumb_top, thumb_height, maximum = (
+            self._thumb_geometry()
+        )
+        if maximum <= 0.0:
+            return
+
+        mouse_y = float(event.GetY())
+        self._drag_mouse_y = mouse_y
+        if thumb_top <= mouse_y <= thumb_top + thumb_height:
+            self._dragging = True
+            self._drag_offset = mouse_y - thumb_top
+        else:
+            self._dragging = True
+            self._drag_offset = thumb_height / 2.0
+            self._drag_to(mouse_y)
+
+        try:
+            self.CaptureMouse()
+        except Exception:
+            pass
+        try:
+
+            self._drag_timer.Start(8)
+        except Exception:
+            pass
+        self.Refresh(False)
+
+    def _drag_to(self, mouse_y):
+        track_top, track_height, _thumb_top, thumb_height, maximum = (
+            self._thumb_geometry()
+        )
+        if maximum <= 0.0:
+            return
+        movable = max(1.0, track_height - thumb_height)
+        desired_top = max(
+            track_top,
+            min(float(mouse_y) - self._drag_offset, track_top + movable),
+        )
+        ratio = (desired_top - track_top) / movable
+        self._scroll_to_pixel(ratio * maximum)
+
+    def _on_motion(self, event):
+        if self._dragging and event.Dragging() and event.LeftIsDown():
+            self._drag_mouse_y = float(event.GetY())
+            return
+        event.Skip()
+
+    def _on_drag_timer(self, _event):
+        if not self._dragging:
+            try:
+                self._drag_timer.Stop()
+            except Exception:
+                pass
+            return
+
+        try:
+            mouse_state = wx.GetMouseState()
+            if not mouse_state.LeftIsDown():
+                self._finish_drag()
+                self._notify_scrolled()
+                return
+        except Exception:
+            pass
+
+        try:
+            point = self.ScreenToClient(wx.GetMousePosition())
+            self._drag_mouse_y = float(point.y)
+        except Exception:
+            pass
+        if self._drag_mouse_y is not None:
+            self._drag_to(self._drag_mouse_y)
+
+    def _finish_drag(self):
+        self._dragging = False
+        self._drag_mouse_y = None
+        try:
+            self._drag_timer.Stop()
+        except Exception:
+            pass
+        try:
+            if self.HasCapture():
+                self.ReleaseMouse()
+        except Exception:
+            pass
+
+        target = self._target()
+        if target is not None:
+            try:
+                target.Refresh(False)
+            except Exception:
+                pass
+        self.Refresh(False)
+
+    def _on_left_up(self, event):
+        was_dragging = self._dragging
+        if was_dragging:
+            self._drag_mouse_y = float(event.GetY())
+            self._drag_to(self._drag_mouse_y)
+        self._finish_drag()
+        if was_dragging:
+            self._notify_scrolled()
+
+    def _on_capture_lost(self, _event):
+        self._finish_drag()
+
+    def _on_target_mousewheel(self, event):
+        target = self._target()
+        if target is None:
+            event.Skip()
+            return
+        try:
+            rotation = float(event.GetWheelRotation())
+            delta = float(event.GetWheelDelta() or 120)
+            lines = max(1, int(event.GetLinesPerAction() or 3))
+        except Exception:
+            event.Skip()
+            return
+
+        self._wheel_remainder += rotation / delta
+        whole_steps = int(self._wheel_remainder)
+        if whole_steps == 0:
+            return
+        self._wheel_remainder -= whole_steps
+
+        offset, _viewport, _content, maximum, _pixels_per_unit = self._metrics()
+        if maximum <= 0.0:
+            event.Skip()
+            return
+        wheel_pixels = max(float(_dip(target, 24)), self._wheel_pixels)
+        self._scroll_to_pixel(
+            offset - whole_steps * lines * wheel_pixels / 3.0
+        )
+        self._notify_scrolled()
+
+    def _on_target_size(self, event):
+        try:
+            event.Skip()
+        except Exception:
+            pass
+        try:
+            wx.CallAfter(self.sync)
+        except Exception:
+            self.sync()
+
+class ModernChoiceOption(ModernButton):
+
+    def __init__(self, parent, label, selected=False, row_height=34):
+        super().__init__(
+            parent,
+            label,
+            primary=False,
+            compact=True,
+            content_alignment="left",
+        )
+        self._selected = bool(selected)
+        self.SetMinSize((-1, _dip(self, row_height)))
+
+    def SetSelected(self, selected):
+        self._selected = bool(selected)
+        self.Refresh(False)
+
+    def _colors(self):
+        if not self.IsEnabled():
+            return (
+                BLOCKS_TO_STORAGE_THEME["surface_alt"],
+                BLOCKS_TO_STORAGE_THEME["disabled"],
+                BLOCKS_TO_STORAGE_THEME["border_soft"],
+            )
+        if self._pressed:
+            return (
+                BLOCKS_TO_STORAGE_THEME["accent_pressed"],
+                BLOCKS_TO_STORAGE_THEME["text"],
+                BLOCKS_TO_STORAGE_THEME["accent_pressed"],
+            )
+        if self._hovered:
+            return (
+                BLOCKS_TO_STORAGE_THEME["surface_hover"],
+                BLOCKS_TO_STORAGE_THEME["text"],
+                BLOCKS_TO_STORAGE_THEME["accent_hover"],
+            )
+        if self._selected:
+            return (
+                BLOCKS_TO_STORAGE_THEME["surface_pressed"],
+                BLOCKS_TO_STORAGE_THEME["text"],
+                BLOCKS_TO_STORAGE_THEME["accent"],
+            )
+        return (
+            BLOCKS_TO_STORAGE_THEME["surface_alt"],
+            BLOCKS_TO_STORAGE_THEME["text"],
+            BLOCKS_TO_STORAGE_THEME["border_soft"],
+        )
+
+class ModernIconChoiceOption(ModernChoiceOption):
+
+    def __init__(self, parent, label, bitmap, selected=False):
+        super().__init__(
+            parent,
+            label,
+            selected=selected,
+            row_height=STORAGE_SELECTOR_TILE_HEIGHT,
+        )
+        self._bitmap = bitmap
+        self._icon_y_offset = STORAGE_SELECTOR_ICON_OFFSET
+        try:
+            font = self.GetFont()
+            font.SetPointSize(max(7, font.GetPointSize() - 1))
+            self.SetFont(font)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _wrapped_lines(graphics_context, text, maximum_width):
+        words = str(text).split()
+        if not words:
+            return [""]
+        lines = []
+        current = words[0]
+        for word in words[1:]:
+            candidate = f"{current} {word}"
+            width, _height = _graphics_text_size(graphics_context, candidate)
+            if width <= maximum_width or not current:
+                current = candidate
+            else:
+                lines.append(current)
+                current = word
+        lines.append(current)
+        if len(lines) <= 2:
+            return lines
+        second = " ".join(lines[1:])
+        while second:
+            candidate = second + "…"
+            width, _height = _graphics_text_size(graphics_context, candidate)
+            if width <= maximum_width:
+                second = candidate
+                break
+            second = second[:-1].rstrip()
+        return [lines[0], second or "…"]
+
+    def _on_paint(self, _event):
+        dc = wx.AutoBufferedPaintDC(self)
+        dc.SetBackground(wx.Brush(_parent_background(self)))
+        dc.Clear()
+        size = self.GetClientSize()
+        if size.width <= 1 or size.height <= 1:
+            return
+        fill, text_color, border = self._colors()
+        gc = wx.GraphicsContext.Create(dc)
+        if gc is None:
+            return
+        gc.SetPen(wx.Pen(border, 1))
+        gc.SetBrush(wx.Brush(fill))
+        gc.DrawRoundedRectangle(
+            0.5,
+            0.5,
+            max(1, size.width - 1),
+            max(1, size.height - 1),
+            _dip(self, 9),
+        )
+
+        bitmap = self._bitmap
+        bitmap_ok = False
+        try:
+            bitmap_ok = bool(bitmap is not None and bitmap.IsOk())
+        except Exception:
+            bitmap_ok = False
+        if bitmap_ok:
+            bitmap_width = float(bitmap.GetWidth())
+            bitmap_height = float(bitmap.GetHeight())
+            icon_x = (size.width - bitmap_width) / 2.0
+            centered_icon_y = (size.height - bitmap_height) / 2.0
+            requested_icon_y = (
+                centered_icon_y
+                + _dip(self, self._icon_y_offset)
+            )
+
+            maximum_icon_y = max(
+                0.0,
+                float(
+                    size.height
+                    - bitmap_height
+                    - _dip(
+                        self,
+                        STORAGE_SELECTOR_ICON_BOTTOM_PADDING,
+                    )
+                ),
+            )
+            icon_y = min(requested_icon_y, maximum_icon_y)
+
+            gc.DrawBitmap(
+                bitmap,
+                icon_x,
+                icon_y,
+                bitmap_width,
+                bitmap_height,
+            )
+        else:
+            placeholder = "?"
+            try:
+                placeholder_font = self.GetFont()
+                placeholder_font.SetWeight(wx.FONTWEIGHT_BOLD)
+                placeholder_font.SetPointSize(
+                    max(10, placeholder_font.GetPointSize() + 3)
+                )
+                gc.SetFont(placeholder_font, BLOCKS_TO_STORAGE_THEME["muted"])
+            except Exception:
+                pass
+            text_width, text_height = _graphics_text_size(gc, placeholder)
+            gc.DrawText(
+                placeholder,
+                (size.width - text_width) / 2.0,
+                (size.height - text_height) / 2.0,
+            )
+
+        gc.SetFont(self.GetFont(), text_color)
+        lines = self._wrapped_lines(
+            gc,
+            self._label,
+            max(20.0, float(size.width - _dip(self, 12))),
+        )
+        line_y = float(_dip(self, 6))
+        shadow_color = BLOCKS_TO_STORAGE_THEME["console_bg"]
+        for line in lines:
+            text_width, text_height = _graphics_text_size(gc, line)
+            text_x = (size.width - text_width) / 2.0
+
+            gc.SetFont(self.GetFont(), shadow_color)
+            gc.DrawText(line, text_x + 1, line_y + 1)
+            gc.SetFont(self.GetFont(), text_color)
+            gc.DrawText(line, text_x, line_y)
+            line_y += text_height + _dip(self, 1)
+
+        if self.HasFocus() and self.IsAvailable() and not self.IsBusy():
+            gc.SetPen(wx.Pen(BLOCKS_TO_STORAGE_THEME["accent_hover"], 1))
+            gc.SetBrush(wx.TRANSPARENT_BRUSH)
+            gc.DrawRoundedRectangle(
+                2.5,
+                2.5,
+                max(1, size.width - 5),
+                max(1, size.height - 5),
+                _dip(self, 7),
+            )
+
+class ModernChoicePopup(wx.Frame):
+
+    def __init__(self, owner):
+        parent = wx.GetTopLevelParent(owner) or owner
+        style = wx.FRAME_NO_TASKBAR | wx.BORDER_NONE
+        try:
+            style |= wx.FRAME_FLOAT_ON_PARENT
+        except Exception:
+            pass
+        super().__init__(parent, title="", style=style)
+        _mark_custom_ui_owned(
+            self,
+            f"{CUSTOM_UI_NAME_PREFIX}:BlocksToStorageChoicePopup",
+        )
+        self._owner_ref = weakref.ref(owner)
+        self._buttons = []
+        self._dismiss_notified = True
+        self._closing = False
+        self._popup_radius = STORAGE_SELECTOR_POPUP_RADIUS
+        self._transparent_corner_colour = (
+            CHOICE_POPUP_TRANSPARENT_COLOUR
+        )
+        self._windows_corner_transparency = False
+        self.SetBackgroundColour(
+            self._transparent_corner_colour
+        )
+        try:
+            self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        except Exception:
+            pass
+        self._windows_corner_transparency = (
+            self._configure_windows_corner_transparency()
+        )
+
+        shell = RoundedPanel(
+            self,
+            background=BLOCKS_TO_STORAGE_THEME["surface"],
+            border=BLOCKS_TO_STORAGE_THEME["border"],
+            radius=self._popup_radius,
+            clear_background=self._transparent_corner_colour,
+        )
+        self._shell = shell
+
+        shell_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        self._scroll = ModernScrollViewport(
+            shell,
+            background=BLOCKS_TO_STORAGE_THEME["surface"],
+        )
+        self._list_content = self._scroll.GetContentWindow()
+        self._content = wx.BoxSizer(wx.VERTICAL)
+        self._scroll.SetContentSizer(self._content)
+        scroll_row = wx.BoxSizer(wx.HORIZONTAL)
+        scroll_row.Add(self._scroll, 1, wx.EXPAND)
+        self._scrollbar = ModernScrollBar(shell, self._scroll)
+        scroll_row.Add(
+            self._scrollbar,
+            0,
+            wx.EXPAND | wx.LEFT,
+            _dip(shell, 4),
+        )
+        shell_sizer.Add(
+            scroll_row,
+            1,
+            wx.EXPAND | wx.ALL,
+            _dip(shell, 6),
+        )
+        shell.SetSizer(shell_sizer)
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        outer.Add(shell, 1, wx.EXPAND)
+        self.SetSizer(outer)
+
+        self.Bind(wx.EVT_ACTIVATE, self._on_activate)
+        self.Bind(wx.EVT_CLOSE, self._on_close)
+        self.Bind(wx.EVT_SIZE, self._on_size)
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_key_down)
+        self.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
+        self._scroll.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
+
+    def _configure_windows_corner_transparency(self):
+        if os.name != "nt":
+            return False
+
+        try:
+            handle = int(self.GetHandle())
+            if not handle:
+                return False
+
+            user32 = ctypes.windll.user32
+            get_window_long = getattr(
+                user32,
+                "GetWindowLongPtrW",
+                user32.GetWindowLongW,
+            )
+            set_window_long = getattr(
+                user32,
+                "SetWindowLongPtrW",
+                user32.SetWindowLongW,
+            )
+            try:
+                get_window_long.argtypes = [
+                    ctypes.c_void_p,
+                    ctypes.c_int,
+                ]
+                get_window_long.restype = ctypes.c_ssize_t
+                set_window_long.argtypes = [
+                    ctypes.c_void_p,
+                    ctypes.c_int,
+                    ctypes.c_ssize_t,
+                ]
+                set_window_long.restype = ctypes.c_ssize_t
+            except Exception:
+                pass
+
+            GWL_EXSTYLE = -20
+            WS_EX_LAYERED = 0x00080000
+            LWA_COLORKEY = 0x00000001
+
+            hwnd = ctypes.c_void_p(handle)
+            extended_style = int(
+                get_window_long(hwnd, GWL_EXSTYLE)
+            )
+            if not extended_style & WS_EX_LAYERED:
+                set_window_long(
+                    hwnd,
+                    GWL_EXSTYLE,
+                    ctypes.c_ssize_t(
+                        extended_style | WS_EX_LAYERED
+                    ),
+                )
+
+                SWP_NOSIZE = 0x0001
+                SWP_NOMOVE = 0x0002
+                SWP_NOZORDER = 0x0004
+                SWP_NOACTIVATE = 0x0010
+                SWP_FRAMECHANGED = 0x0020
+                user32.SetWindowPos(
+                    hwnd,
+                    None,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOSIZE
+                    | SWP_NOMOVE
+                    | SWP_NOZORDER
+                    | SWP_NOACTIVATE
+                    | SWP_FRAMECHANGED,
+                )
+
+            colour = self._transparent_corner_colour
+            colour_key = (
+                int(colour.Red())
+                | (int(colour.Green()) << 8)
+                | (int(colour.Blue()) << 16)
+            )
+
+            set_layered_attributes = (
+                user32.SetLayeredWindowAttributes
+            )
+            set_layered_attributes.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_uint32,
+                ctypes.c_ubyte,
+                ctypes.c_uint32,
+            ]
+            set_layered_attributes.restype = ctypes.c_int
+
+            return bool(
+                set_layered_attributes(
+                    hwnd,
+                    colour_key,
+                    255,
+                    LWA_COLORKEY,
+                )
+            )
+        except Exception:
+            return False
+
+    def _refresh_rounded_window_boundary(self):
+        if os.name == "nt":
+            self._windows_corner_transparency = (
+                self._configure_windows_corner_transparency()
+            )
+            if self._windows_corner_transparency:
+                return True
+
+        return _apply_rounded_window_shape(
+            self,
+            self._popup_radius,
+        )
+
+    def _on_size(self, event):
+        try:
+            event.Skip()
+        except Exception:
+            pass
+        try:
+            wx.CallAfter(
+                self._refresh_rounded_window_boundary
+            )
+        except Exception:
+            self._refresh_rounded_window_boundary()
+
+    def rebuild(self, owner, choices, selection):
+        old_buttons = list(self._buttons)
+        self._buttons = []
+        try:
+            self._content.Clear(delete_windows=False)
+        except Exception:
+            pass
+        for button in old_buttons:
+            try:
+                button.Destroy()
+            except Exception:
+                pass
+
+        self._icon_mode = bool(owner.UsesIconPopup())
+        if self._icon_mode:
+            icon_columns = owner.GetIconPopupColumns()
+            grid = wx.GridSizer(
+                rows=0,
+                cols=icon_columns,
+                vgap=_dip(self._list_content, STORAGE_SELECTOR_GRID_GAP),
+                hgap=_dip(self._list_content, STORAGE_SELECTOR_GRID_GAP),
+            )
+            self._content.Add(grid, 0, wx.EXPAND)
+            for index, label in enumerate(choices):
+                button = ModernIconChoiceOption(
+                    self._list_content,
+                    label,
+                    owner.GetIconBitmap(label, STORAGE_SELECTOR_ICON_SIZE),
+                    selected=(index == selection),
+                )
+                button.Bind(
+                    wx.EVT_BUTTON,
+                    lambda _event, item_index=index: self._choose(item_index),
+                )
+                button.Bind(
+                    wx.EVT_LEFT_DCLICK,
+                    lambda _event, item_index=index: self._choose(item_index),
+                )
+                grid.Add(button, 1, wx.EXPAND)
+                self._buttons.append(button)
+        else:
+            for index, label in enumerate(choices):
+                button = ModernChoiceOption(
+                    self._list_content,
+                    label,
+                    selected=(index == selection),
+                    row_height=32,
+                )
+                button.Bind(
+                    wx.EVT_BUTTON,
+                    lambda _event, item_index=index: self._choose(item_index),
+                )
+                button.Bind(
+                    wx.EVT_LEFT_DCLICK,
+                    lambda _event, item_index=index: self._choose(item_index),
+                )
+                self._content.Add(
+                    button,
+                    0,
+                    wx.EXPAND | wx.BOTTOM,
+                    _dip(self._list_content, 2),
+                )
+                self._buttons.append(button)
+
+        self._scroll._modern_sync_layout()
+        try:
+            self._scrollbar._bind_wheel_tree(self._scroll)
+        except Exception:
+            pass
+        self._scrollbar.sync()
+        self.Layout()
+
+    def show_for(self, owner):
+        choices = list(owner._choices)
+        self.rebuild(owner, choices, owner.GetSelection())
+
+        owner_rect = owner.GetScreenRect()
+        display_index = wx.Display.GetFromWindow(owner)
+        if display_index == wx.NOT_FOUND:
+            display_index = 0
+        try:
+            work_area = wx.Display(display_index).GetClientArea()
+        except Exception:
+            work_area = wx.Rect(0, 0, *wx.GetDisplaySize())
+
+        if self._icon_mode:
+            icon_columns = owner.GetIconPopupColumns()
+            visible_rows = owner.GetIconPopupVisibleRows()
+            width = max(
+                owner_rect.width,
+                _dip(owner, STORAGE_SELECTOR_MIN_WIDTH),
+            )
+            rows = max(
+                1,
+                (len(choices) + icon_columns - 1) // icon_columns,
+            )
+            tile_height = _dip(owner, STORAGE_SELECTOR_TILE_HEIGHT)
+            grid_gap = _dip(owner, STORAGE_SELECTOR_GRID_GAP)
+            wanted_height = (
+                rows * tile_height
+                + max(0, rows - 1) * grid_gap
+                + _dip(owner, 14)
+            )
+            minimum_height = _dip(owner, 180)
+            work_area_limit = max(
+                _dip(owner, 220),
+                int(work_area.height * 0.65),
+            )
+            if visible_rows is None:
+                maximum_height = work_area_limit
+            else:
+                bounded_rows = max(1, min(rows, int(visible_rows)))
+                visible_height = (
+                    bounded_rows * tile_height
+                    + max(0, bounded_rows - 1) * grid_gap
+                    + _dip(owner, 14)
+                )
+                maximum_height = min(work_area_limit, visible_height)
+        else:
+            width = max(owner_rect.width, _dip(owner, 240))
+            row_height = _dip(owner, 35)
+            wanted_height = len(choices) * row_height + _dip(owner, 14)
+            minimum_height = _dip(owner, 90)
+            maximum_height = max(_dip(owner, 140), int(work_area.height * 0.55))
+        width = min(width, max(_dip(owner, 260), work_area.width))
+        height = min(max(minimum_height, wanted_height), maximum_height)
+
+        x = owner_rect.x + int(round((owner_rect.width - width) / 2.0))
+        y = owner_rect.bottom + _dip(owner, 4)
+        if y + height > work_area.bottom:
+            y = owner_rect.y - height - _dip(owner, 4)
+        x = min(max(x, work_area.x), max(work_area.x, work_area.right - width))
+        y = min(max(y, work_area.y), max(work_area.y, work_area.bottom - height))
+
+        self.SetSize((width, height))
+        self.SetPosition((x, y))
+        self._refresh_rounded_window_boundary()
+        self.Layout()
+        self._scroll._modern_sync_layout()
+        self._scrollbar.sync()
+        self._dismiss_notified = False
+        self._closing = False
+        self.Show(True)
+        self.Raise()
+        try:
+            self._shell.Refresh(False)
+            self._shell.Update()
+        except Exception:
+            pass
+
+        selection = owner.GetSelection()
+        if 0 <= selection < len(self._buttons):
+            try:
+                self._buttons[selection].SetFocus()
+                self._scroll.ScrollChildIntoView(self._buttons[selection])
+            except Exception:
+                pass
+        else:
+            try:
+                self.SetFocus()
+            except Exception:
+                pass
+
+    def Dismiss(self, notify_owner=True):
+        if self._closing:
+            return
+        self._closing = True
+        try:
+            try:
+                if self.IsShown():
+                    self.Hide()
+            except Exception:
+                pass
+
+            if notify_owner and not self._dismiss_notified:
+                self._dismiss_notified = True
+                owner = self._owner_ref()
+                if owner is not None:
+                    owner._on_popup_dismissed(self)
+        finally:
+            self._closing = False
+
+    def _choose(self, index):
+        owner = self._owner_ref()
+        if owner is not None:
+            owner._select_from_popup(index)
+        self.Dismiss()
+
+    def _on_activate(self, event):
+        try:
+            active = bool(event.GetActive())
+        except Exception:
+            active = True
+        try:
+            event.Skip()
+        except Exception:
+            pass
+        if not active and self.IsShown():
+
+            try:
+                wx.CallAfter(self.Dismiss)
+            except Exception:
+                self.Dismiss()
+
+    def _on_close(self, event):
+
+        if not self._dismiss_notified:
+            self._dismiss_notified = True
+            owner = self._owner_ref()
+            if owner is not None:
+                owner._on_popup_dismissed(self)
+        try:
+            event.Skip()
+        except Exception:
+            pass
+
+    def _on_key_down(self, event):
+        if event.GetKeyCode() == wx.WXK_ESCAPE:
+            self.Dismiss()
+            return
+        event.Skip()
+
+    def destroy_safely(self):
+        try:
+            self.Dismiss(notify_owner=False)
+        except Exception:
+            pass
+        self._dismiss_notified = True
+        try:
+            self.Destroy()
+        except Exception:
+            pass
+
+class ModernChoice(wx.Panel):
+
+    def __init__(
+        self,
+        parent,
+        choices,
+        icon_provider=None,
+        show_icons=False,
+        icon_columns=STORAGE_SELECTOR_ICON_COLUMNS,
+        icon_visible_rows=None,
+    ):
+        super().__init__(
+            parent,
+            style=(
+                wx.BORDER_NONE
+                | wx.WANTS_CHARS
+                | wx.FULL_REPAINT_ON_RESIZE
+                | wx.CLIP_CHILDREN
+            ),
+        )
+        _mark_custom_ui_owned(self)
+        self._choices = [str(choice) for choice in choices]
+        self._selection = 0 if self._choices else wx.NOT_FOUND
+        self._hovered = False
+        self._pressed = False
+        self._fill = BLOCKS_TO_STORAGE_THEME["surface_alt"]
+        self._radius = 9
+        self._popup = None
+        self._popup_open = False
+        self._suppress_popup_until = 0.0
+        self._icon_provider = icon_provider
+        self._show_icons = bool(show_icons)
+        try:
+            self._icon_columns = max(1, int(icon_columns))
+        except Exception:
+            self._icon_columns = STORAGE_SELECTOR_ICON_COLUMNS
+        try:
+            self._icon_visible_rows = (
+                None
+                if icon_visible_rows is None
+                else max(1, int(icon_visible_rows))
+            )
+        except Exception:
+            self._icon_visible_rows = None
+
+        self.SetBackgroundColour(self._fill)
+        self.SetForegroundColour(BLOCKS_TO_STORAGE_THEME["text"])
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.SetCursor(wx.Cursor(wx.CURSOR_HAND))
+
+        self.SetMinSize((-1, _dip(self, 42)))
+
+        initial_label = (
+            self._choices[self._selection]
+            if self._selection != wx.NOT_FOUND
+            else ""
+        )
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        self._selected_icon_bitmap = wx.NullBitmap
+        self._selected_icon_visible = False
+        self._selected_icon_slot = 34
+        self._label_control = wx.StaticText(self, label=initial_label)
+        self._chevron_control = wx.StaticText(self, label="\u25be")
+        for child in (
+            self._label_control,
+            self._chevron_control,
+        ):
+            _mark_custom_ui_owned(child)
+            child.SetBackgroundColour(self._fill)
+            child.SetForegroundColour(BLOCKS_TO_STORAGE_THEME["text"])
+            child.SetCursor(wx.Cursor(wx.CURSOR_HAND))
+
+        row.AddSpacer(_dip(self, 12))
+        self._icon_spacer_item = row.AddSpacer(
+            _dip(self, self._selected_icon_slot + 4)
+        )
+        row.Add(
+            self._label_control,
+            1,
+            wx.ALIGN_CENTER_VERTICAL,
+        )
+        row.Add(
+            self._chevron_control,
+            0,
+            wx.RIGHT | wx.ALIGN_CENTER_VERTICAL,
+            _dip(self, 12),
+        )
+        self.SetSizer(row)
+
+        self.Bind(wx.EVT_PAINT, self._on_paint)
+        self.Bind(wx.EVT_ERASE_BACKGROUND, lambda _event: None)
+        self.Bind(wx.EVT_SIZE, self._on_size)
+        self.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
+        self.Bind(wx.EVT_SET_FOCUS, self._on_focus_change)
+        self.Bind(wx.EVT_KILL_FOCUS, self._on_focus_change)
+        self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
+
+        for target in (self, self._label_control, self._chevron_control):
+            target.Bind(wx.EVT_ENTER_WINDOW, self._on_enter)
+            target.Bind(wx.EVT_LEAVE_WINDOW, self._on_leave)
+            target.Bind(wx.EVT_LEFT_DOWN, self._on_left_down)
+            target.Bind(wx.EVT_LEFT_UP, self._on_left_up)
+
+        self._refresh_selected_icon()
+        self._apply_visual_state()
+
+    def GetIconPopupColumns(self):
+        return max(1, int(self._icon_columns))
+
+    def GetIconPopupVisibleRows(self):
+        return self._icon_visible_rows
+
+    def SetShowIcons(self, show_icons=True):
+        requested = bool(show_icons)
+        if requested == self._show_icons:
+            self._refresh_selected_icon()
+            return
+        self._show_icons = requested
+        self._dismiss_popup()
+        self._refresh_selected_icon()
+        self.Layout()
+        self.Refresh(False)
+
+    def UsesIconPopup(self):
+        provider = self._icon_provider
+        if not self._show_icons or provider is None or not self._choices:
+            return False
+        try:
+            if provider.available_count() <= 0:
+                return False
+            for choice in self._choices:
+                bitmap = provider.get_bitmap(choice, _dip(self, 24), padding=1)
+                if bitmap is None or not bitmap.IsOk():
+                    return False
+            return True
+        except Exception:
+            return False
+
+    def GetIconBitmap(self, choice, size, padding=0):
+        provider = self._icon_provider
+        if provider is None:
+            return wx.NullBitmap
+        try:
+            return provider.get_bitmap(
+                choice,
+                _dip(self, size),
+                padding=_dip(self, padding),
+            )
+        except Exception:
+            return wx.NullBitmap
+
+    def GetCompactIconBitmap(self, choice, size):
+        provider = self._icon_provider
+        if provider is None:
+            return wx.NullBitmap
+        try:
+            return provider.get_compact_bitmap(choice, _dip(self, size))
+        except Exception:
+            return wx.NullBitmap
+
+    def _refresh_selected_icon(self):
+        choice = self.GetStringSelection()
+        bitmap = wx.NullBitmap
+        show = False
+        if self._show_icons and choice:
+
+            bitmap = self.GetCompactIconBitmap(choice, 34)
+            try:
+                show = bool(bitmap.IsOk())
+            except Exception:
+                show = False
+        self._selected_icon_bitmap = bitmap if show else wx.NullBitmap
+        self._selected_icon_visible = bool(show)
+        try:
+            self._icon_spacer_item.Show(bool(show))
+        except Exception:
+            pass
+        try:
+            self.Layout()
+            self.Refresh(False)
+        except Exception:
+            pass
+
+    def FindString(self, value):
+        try:
+            return self._choices.index(str(value))
+        except ValueError:
+            return wx.NOT_FOUND
+
+    def SetSelection(self, selection):
+        selection = int(selection)
+        if 0 <= selection < len(self._choices):
+            self._selection = selection
+            label = self._choices[selection]
+        else:
+            self._selection = wx.NOT_FOUND
+            label = ""
+        self._label_control.SetLabel(label)
+        self._refresh_selected_icon()
+        self.Layout()
+        self.Refresh(False)
+
+    def GetSelection(self):
+        return self._selection
+
+    def GetStringSelection(self):
+        if 0 <= self._selection < len(self._choices):
+            return self._choices[self._selection]
+        return ""
+
+    def DoGetBestClientSize(self):
+        dc = wx.ClientDC(self)
+        dc.SetFont(self.GetFont())
+        width = max(
+            (dc.GetTextExtent(choice)[0] for choice in self._choices),
+            default=120,
+        )
+        return wx.Size(width + _dip(self, 48), _dip(self, 42))
+
+    def Enable(self, enable=True):
+        result = super().Enable(enable)
+        self.SetCursor(
+            wx.Cursor(wx.CURSOR_HAND if enable else wx.CURSOR_ARROW)
+        )
+        for child in (self._label_control, self._chevron_control):
+            try:
+                child.SetCursor(
+                    wx.Cursor(
+                        wx.CURSOR_HAND if enable else wx.CURSOR_ARROW
+                    )
+                )
+            except Exception:
+                pass
+        if not enable:
+            self._dismiss_popup()
+        self._apply_visual_state()
+        return result
+
+    def _visual_colors(self):
+        if not self.IsEnabled():
+            return (
+                BLOCKS_TO_STORAGE_THEME["surface_alt"],
+                BLOCKS_TO_STORAGE_THEME["disabled"],
+                BLOCKS_TO_STORAGE_THEME["border_soft"],
+            )
+        if self._pressed:
+            fill = BLOCKS_TO_STORAGE_THEME["surface_pressed"]
+        elif self._hovered or self._popup_open:
+            fill = BLOCKS_TO_STORAGE_THEME["surface_hover"]
+        else:
+            fill = BLOCKS_TO_STORAGE_THEME["surface_alt"]
+        border = (
+            BLOCKS_TO_STORAGE_THEME["accent_hover"]
+            if self.HasFocus() or self._popup_open
+            else BLOCKS_TO_STORAGE_THEME["border"]
+        )
+        return fill, BLOCKS_TO_STORAGE_THEME["text"], border
+
+    def _apply_visual_state(self):
+        fill, text_color, _border = self._visual_colors()
+        try:
+            self.SetBackgroundColour(fill)
+        except Exception:
+            pass
+        try:
+            self._chevron_control.SetLabel("\u25b4" if self._popup_open else "\u25be")
+        except Exception:
+            pass
+        for child in (self._label_control, self._chevron_control):
+            try:
+                child.SetBackgroundColour(fill)
+                child.SetForegroundColour(text_color)
+                child.Refresh(False)
+            except Exception:
+                pass
+        self.Refresh(False)
+
+    def _on_paint(self, _event):
+        dc = wx.AutoBufferedPaintDC(self)
+        dc.SetBackground(wx.Brush(_parent_background(self)))
+        dc.Clear()
+        size = self.GetClientSize()
+        if size.width <= 1 or size.height <= 1:
+            return
+        fill, _text_color, border = self._visual_colors()
+        gc = wx.GraphicsContext.Create(dc)
+        if gc is None:
+            return
+        gc.SetPen(wx.Pen(border, 1))
+        gc.SetBrush(wx.Brush(fill))
+        gc.DrawRoundedRectangle(
+            0.5,
+            0.5,
+            max(1, size.width - 1),
+            max(1, size.height - 1),
+            _dip(self, self._radius),
+        )
+
+        bitmap = self._selected_icon_bitmap
+        try:
+            bitmap_ok = bool(
+                self._selected_icon_visible
+                and bitmap is not None
+                and bitmap.IsOk()
+            )
+        except Exception:
+            bitmap_ok = False
+        if bitmap_ok:
+            bitmap_width = float(bitmap.GetWidth())
+            bitmap_height = float(bitmap.GetHeight())
+            slot_width = float(_dip(self, self._selected_icon_slot))
+            slot_left = float(_dip(self, 8))
+            icon_x = slot_left + max(0.0, (slot_width - bitmap_width) / 2.0)
+            icon_y = max(float(_dip(self, 4)), (size.height - bitmap_height) / 2.0)
+            gc.DrawBitmap(
+                bitmap,
+                icon_x,
+                icon_y,
+                bitmap_width,
+                bitmap_height,
+            )
+
+    def _on_size(self, event):
+        try:
+            self.Layout()
+            self.Refresh(False)
+        except Exception:
+            pass
+        event.Skip()
+
+    def _on_enter(self, event):
+        self._hovered = True
+        self._apply_visual_state()
+        event.Skip()
+
+    def _on_leave(self, event):
+        try:
+            wx.CallAfter(self._refresh_hover_from_pointer)
+        except Exception:
+            self._refresh_hover_from_pointer()
+        event.Skip()
+
+    def _refresh_hover_from_pointer(self):
+        try:
+            mouse = wx.GetMousePosition()
+            rect = self.GetScreenRect()
+            hovered = bool(rect.Contains(mouse))
+        except Exception:
+            hovered = False
+        if hovered != self._hovered:
+            self._hovered = hovered
+            if not hovered and not self.HasCapture():
+                self._pressed = False
+            self._apply_visual_state()
+
+    def _on_left_down(self, event):
+        if not self.IsEnabled():
+            return
+        try:
+            self.SetFocus()
+        except Exception:
+            pass
+        self._pressed = True
+        self._apply_visual_state()
+
+    def _on_left_up(self, event):
+        if not self.IsEnabled():
+            return
+        was_pressed = self._pressed
+        self._pressed = False
+        self._apply_visual_state()
+        if was_pressed:
+            self._toggle_popup()
+
+    def _on_focus_change(self, event):
+        self._apply_visual_state()
+        event.Skip()
+
+    def _toggle_popup(self):
+        if not self.IsEnabled() or not self._choices:
+            return
+        now = perf_counter()
+        if self._popup_open:
+            self._dismiss_popup()
+            return
+        if now < self._suppress_popup_until:
+            return
+
+        popup = self._popup
+        try:
+            popup_alive = popup is not None and not popup.IsBeingDeleted()
+        except Exception:
+            popup_alive = popup is not None
+        if not popup_alive:
+            popup = ModernChoicePopup(self)
+            self._popup = popup
+
+        self._popup_open = True
+        self._apply_visual_state()
+        try:
+            popup.show_for(self)
+        except Exception:
+            self._popup_open = False
+            self._apply_visual_state()
+            raise
+
+    def _dismiss_popup(self):
+        popup = self._popup
+        if popup is None:
+            self._popup_open = False
+            self._apply_visual_state()
+            return
+        try:
+            popup.Dismiss()
+        except Exception:
+            self._popup_open = False
+            self._apply_visual_state()
+
+    def _on_popup_dismissed(self, popup):
+        if popup is not self._popup:
+            return
+        self._popup_open = False
+
+        self._suppress_popup_until = perf_counter() + 0.20
+        self._pressed = False
+        self._apply_visual_state()
+
+    def _select_from_popup(self, index):
+        if index == self._selection:
+            return
+        self.SetSelection(index)
+        _emit_command_event(self, wx.EVT_CHOICE)
+
+    def _on_key_down(self, event):
+        if not self.IsEnabled():
+            event.Skip()
+            return
+        key = event.GetKeyCode()
+        if key in (
+            wx.WXK_SPACE,
+            wx.WXK_RETURN,
+            wx.WXK_NUMPAD_ENTER,
+            wx.WXK_DOWN,
+        ):
+            self._toggle_popup()
+            return
+        if key == wx.WXK_ESCAPE and self._popup_open:
+            self._dismiss_popup()
+            return
+        if key == wx.WXK_UP and self._choices:
+            old = self._selection
+            self.SetSelection(max(0, self._selection - 1))
+            if self._selection != old:
+                _emit_command_event(self, wx.EVT_CHOICE)
+            return
+        event.Skip()
+
+    def _on_destroy(self, event):
+        popup = self._popup
+        self._popup = None
+        self._popup_open = False
+        if popup is not None:
+            try:
+                destroy_safely = getattr(popup, "destroy_safely", None)
+                if destroy_safely is not None:
+                    destroy_safely()
+                else:
+                    popup.Dismiss()
+                    popup.Destroy()
+            except Exception:
+                pass
+        event.Skip()
+
+class DarkMessageDialog(wx.Dialog):
+
+    def __init__(self, parent, message, caption, style=wx.OK | wx.CENTRE):
+        dialog_style = wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER
+        super().__init__(parent, title=str(caption), style=dialog_style)
+        _mark_custom_ui_owned(
+            self,
+            f"{CUSTOM_UI_NAME_PREFIX}:BlocksToStorageDialog",
+        )
+        self._message_style = int(style)
+        self.SetBackgroundColour(BLOCKS_TO_STORAGE_THEME["window"])
+        self.SetMinSize((_dip(self, 390), _dip(self, 190)))
+
+        root = wx.Panel(self, style=wx.BORDER_NONE | wx.CLIP_CHILDREN)
+        _mark_custom_ui_owned(root)
+        root.SetBackgroundColour(BLOCKS_TO_STORAGE_THEME["window"])
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        title = _make_text(root, str(caption), point_size=13, bold=True)
+        outer.Add(title, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, _dip(root, 18))
+
+        message_text = _make_text(root, str(message), muted=False)
+        message_text.Wrap(_dip(root, 470))
+        outer.Add(
+            message_text,
+            1,
+            wx.EXPAND | wx.ALL,
+            _dip(root, 18),
+        )
+
+        button_row = wx.BoxSizer(wx.HORIZONTAL)
+        button_row.AddStretchSpacer(1)
+
+        buttons = []
+        if style & wx.YES_NO:
+            buttons = [
+                ("Yes", wx.ID_YES, not bool(style & wx.NO_DEFAULT)),
+                ("No", wx.ID_NO, bool(style & wx.NO_DEFAULT)),
+            ]
+        elif style & wx.OK and style & wx.CANCEL:
+            buttons = [
+                ("OK", wx.ID_OK, True),
+                ("Cancel", wx.ID_CANCEL, False),
+            ]
+        elif style & wx.CANCEL and not style & wx.OK:
+            buttons = [("Cancel", wx.ID_CANCEL, True)]
+        else:
+            buttons = [("OK", wx.ID_OK, True)]
+
+        default_button = None
+        for label, result_id, is_default in buttons:
+            button = ModernButton(
+                root,
+                label,
+                primary=is_default,
+                compact=True,
+            )
+            button.SetMinSize((_dip(root, 92), _dip(root, 36)))
+            button.Bind(
+                wx.EVT_BUTTON,
+                lambda _event, modal_id=result_id: self.EndModal(modal_id),
+            )
+            button_row.Add(button, 0, wx.LEFT, _dip(root, 8))
+            if is_default:
+                default_button = button
+
+        outer.Add(
+            button_row,
+            0,
+            wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM,
+            _dip(root, 18),
+        )
+        root.SetSizer(outer)
+
+        dialog_sizer = wx.BoxSizer(wx.VERTICAL)
+        dialog_sizer.Add(root, 1, wx.EXPAND)
+        self.SetSizer(dialog_sizer)
+        self.Fit()
+        size = self.GetSize()
+        self.SetSize((max(size.width, _dip(self, 420)), max(size.height, _dip(self, 210))))
+        self.CenterOnParent()
+
+        if default_button is not None:
+            try:
+                default_button.SetFocus()
+            except Exception:
+                pass
+
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+
+    def _on_char_hook(self, event):
+        if event.GetKeyCode() == wx.WXK_ESCAPE:
+            if self._message_style & wx.YES_NO:
+                self.EndModal(wx.ID_NO)
+            elif self._message_style & wx.CANCEL:
+                self.EndModal(wx.ID_CANCEL)
+            else:
+                self.EndModal(wx.ID_OK)
+            return
+        event.Skip()
+
+def _show_dark_message(
+    message,
+    caption="Message",
+    style=wx.OK | wx.CENTRE,
+    parent=None,
+    *unused_position,
+):
+    dialog = DarkMessageDialog(parent, message, caption, style)
+    try:
+        return dialog.ShowModal()
+    finally:
+        dialog.Destroy()
+
+class DarkActionPickerDialog(wx.Dialog):
+
+    def __init__(
+        self,
+        parent,
+        actions,
+        initial_size=None,
+        on_size_changed=None,
+    ):
+        super().__init__(
+            parent,
+            title="Manage Blocks to Storage files",
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
+        )
+        _mark_custom_ui_owned(
+            self,
+            f"{CUSTOM_UI_NAME_PREFIX}:BlocksToStorageSettingsDialog",
+        )
+        self._actions = list(actions)
+        self._selection = wx.NOT_FOUND
+        self._on_size_changed = on_size_changed
+        self.SetBackgroundColour(BLOCKS_TO_STORAGE_THEME["window"])
+        minimum_size = (
+            _dip(self, MANAGE_DIALOG_MIN_SIZE[0]),
+            _dip(self, MANAGE_DIALOG_MIN_SIZE[1]),
+        )
+        self.SetMinSize(minimum_size)
+
+        requested_size = initial_size
+        if (
+            not isinstance(requested_size, (list, tuple))
+            or len(requested_size) != 2
+            or any(
+                isinstance(value, bool) or not isinstance(value, int)
+                for value in requested_size
+            )
+        ):
+            requested_size = MANAGE_DIALOG_DEFAULT_SIZE
+
+        width = max(minimum_size[0], int(requested_size[0]))
+        height = max(minimum_size[1], int(requested_size[1]))
+        try:
+            display_index = wx.Display.GetFromWindow(parent)
+            if display_index == wx.NOT_FOUND:
+                display_index = 0
+            work_area = wx.Display(display_index).GetClientArea()
+            width = min(width, max(minimum_size[0], work_area.width))
+            height = min(height, max(minimum_size[1], work_area.height))
+        except Exception:
+            pass
+        self.SetSize((width, height))
+
+        root = wx.Panel(self, style=wx.BORDER_NONE | wx.CLIP_CHILDREN)
+        _mark_custom_ui_owned(root)
+        root.SetBackgroundColour(BLOCKS_TO_STORAGE_THEME["window"])
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        title = _make_text(root, "MANAGE PLUGIN FILES", point_size=14, bold=True)
+        outer.Add(title, 0, wx.LEFT | wx.RIGHT | wx.TOP, _dip(root, 18))
+
+        self._description = _make_text(
+            root,
+            "Choose what to do with Blocks to Storage managed files.",
+            muted=True,
+        )
+        self._description.SetMinSize((-1, _dip(root, 72)))
+        self._description.Wrap(_dip(root, 490))
+        outer.Add(
+            self._description,
+            0,
+            wx.EXPAND | wx.ALL,
+            _dip(root, 18),
+        )
+
+        list_card = RoundedPanel(
+            root,
+            background=BLOCKS_TO_STORAGE_THEME["surface"],
+            border=BLOCKS_TO_STORAGE_THEME["border_soft"],
+            radius=10,
+        )
+        card_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        self._scroll = ModernScrollViewport(
+            list_card,
+            background=BLOCKS_TO_STORAGE_THEME["surface"],
+        )
+        self._list_content = self._scroll.GetContentWindow()
+        self._list_sizer = wx.BoxSizer(wx.VERTICAL)
+        self._rows = []
+        for index, (label, _description) in enumerate(self._actions):
+            row = ModernChoiceOption(
+                self._list_content,
+                label,
+                selected=False,
+            )
+            row.Bind(
+                wx.EVT_BUTTON,
+                lambda _event, item_index=index: self._select(item_index),
+            )
+            row.Bind(
+                wx.EVT_LEFT_DCLICK,
+                lambda _event, item_index=index: self._open(item_index),
+            )
+            self._list_sizer.Add(
+                row,
+                0,
+                wx.EXPAND | wx.BOTTOM,
+                _dip(self._list_content, 4),
+            )
+            self._rows.append(row)
+        self._scroll.SetContentSizer(self._list_sizer)
+
+        list_row = wx.BoxSizer(wx.HORIZONTAL)
+        list_row.Add(self._scroll, 1, wx.EXPAND)
+        self._scrollbar = ModernScrollBar(list_card, self._scroll)
+        list_row.Add(
+            self._scrollbar,
+            0,
+            wx.EXPAND | wx.LEFT,
+            _dip(list_card, 4),
+        )
+        card_sizer.Add(list_row, 1, wx.EXPAND | wx.ALL, _dip(list_card, 6))
+        list_card.SetSizer(card_sizer)
+        outer.Add(
+            list_card,
+            1,
+            wx.EXPAND | wx.LEFT | wx.RIGHT,
+            _dip(root, 18),
+        )
+
+        button_row = wx.BoxSizer(wx.HORIZONTAL)
+        button_row.AddStretchSpacer(1)
+        self._open_button = ModernButton(root, "Open", primary=True, compact=True)
+        self._open_button.Enable(False)
+        self._open_button.SetMinSize((_dip(root, 96), _dip(root, 36)))
+        self._open_button.Bind(wx.EVT_BUTTON, lambda _event: self._open(self._selection))
+        close_button = ModernButton(root, "Close", compact=True)
+        close_button.SetMinSize((_dip(root, 96), _dip(root, 36)))
+        close_button.Bind(wx.EVT_BUTTON, lambda _event: self.EndModal(wx.ID_CANCEL))
+        button_row.Add(self._open_button, 0, wx.LEFT, _dip(root, 8))
+        button_row.Add(close_button, 0, wx.LEFT, _dip(root, 8))
+        outer.Add(
+            button_row,
+            0,
+            wx.EXPAND | wx.ALL,
+            _dip(root, 18),
+        )
+
+        root.SetSizer(outer)
+        dialog_sizer = wx.BoxSizer(wx.VERTICAL)
+        dialog_sizer.Add(root, 1, wx.EXPAND)
+        self.SetSizer(dialog_sizer)
+        self.CenterOnParent()
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        self.Bind(wx.EVT_SIZE, self._on_size)
+        try:
+            wx.CallAfter(self._sync_scroll_area)
+        except Exception:
+            self._sync_scroll_area()
+
+    def _sync_scroll_area(self):
+        try:
+            self._scroll._modern_sync_layout()
+        except Exception:
+            pass
+        try:
+            self._scrollbar.sync()
+        except Exception:
+            pass
+
+    def _on_size(self, event):
+        try:
+            event.Skip()
+        except Exception:
+            pass
+        try:
+            wx.CallAfter(self._sync_scroll_area)
+        except Exception:
+            self._sync_scroll_area()
+
+        callback = self._on_size_changed
+        if callback is not None:
+            try:
+                callback(self)
+            except Exception:
+                pass
+
+    def GetSelection(self):
+        return self._selection
+
+    def _select(self, index):
+        if not (0 <= index < len(self._actions)):
+            return
+        self._selection = index
+        for row_index, row in enumerate(self._rows):
+            row.SetSelected(row_index == index)
+        self._description.SetLabel(self._actions[index][1])
+        self._description.Wrap(max(_dip(self, 320), self.GetClientSize().width - _dip(self, 70)))
+        self._open_button.Enable(True)
+        self.Layout()
+
+    def _open(self, index):
+        if 0 <= index < len(self._actions):
+            self._selection = index
+            self.EndModal(wx.ID_OK)
+
+    def _on_char_hook(self, event):
+        key = event.GetKeyCode()
+        if key == wx.WXK_ESCAPE:
+            self.EndModal(wx.ID_CANCEL)
+            return
+        if key in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER) and self._selection != wx.NOT_FOUND:
+            self.EndModal(wx.ID_OK)
+            return
+        event.Skip()
+
+class ModernTextField(RoundedPanel):
+
+    _FORWARDED_EVENTS = (wx.EVT_TEXT, wx.EVT_TEXT_ENTER, wx.EVT_KILL_FOCUS, wx.EVT_SET_FOCUS)
+
+    def __init__(self, parent, value="", width=64, center=True, large=True):
+        super().__init__(parent, background=BLOCKS_TO_STORAGE_THEME["surface_alt"], border=BLOCKS_TO_STORAGE_THEME["border"], radius=8)
+        self.SetMinSize((_dip(self, width), _dip(self, 32)))
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        self._text = wx.TextCtrl(
+            self,
+            value=str(value),
+            style=(wx.BORDER_NONE | wx.TE_PROCESS_ENTER | (wx.TE_CENTER if center else 0)),
+        )
+        _mark_custom_ui_owned(self._text)
+        self._text.SetBackgroundColour(BLOCKS_TO_STORAGE_THEME["surface_alt"])
+        self._text.SetForegroundColour(BLOCKS_TO_STORAGE_THEME["text"])
+
+        try:
+            font = self._text.GetFont()
+            base_size = max(1.0, float(font.GetPointSize()))
+            target_size = base_size * (1.25 if large else 1.0)
+            set_fractional_size = getattr(font, "SetFractionalPointSize", None)
+            if callable(set_fractional_size):
+                set_fractional_size(target_size)
+            else:
+                font.SetPointSize(max(1, int(round(target_size))))
+            self._text.SetFont(font)
+        except Exception:
+            pass
+
+        sizer.AddSpacer(_dip(self, 8))
+        sizer.Add(
+            self._text,
+            1,
+            wx.EXPAND | wx.LEFT | wx.RIGHT,
+            _dip(self, 4),
+        )
+
+        sizer.AddSpacer(_dip(self, 2))
+        self.SetSizer(sizer)
+        self._text.Bind(wx.EVT_SET_FOCUS, self._on_focus_change)
+        self._text.Bind(wx.EVT_KILL_FOCUS, self._on_focus_change)
+        self.Bind(wx.EVT_LEFT_UP, lambda _event: self._text.SetFocus())
+
+    def Bind(self, event, handler, source=None, id=wx.ID_ANY, id2=wx.ID_ANY):
+        if hasattr(self, "_text") and event in self._FORWARDED_EVENTS:
+            return self._text.Bind(event, handler, source=source, id=id, id2=id2)
+        return super().Bind(event, handler, source=source, id=id, id2=id2)
+
+    def SetValue(self, value):
+        self._text.SetValue(str(value))
+
+    def ChangeValue(self, value):
+        self._text.ChangeValue(str(value))
+
+    def GetValue(self):
+        return self._text.GetValue()
+
+    def Enable(self, enable=True):
+        result = super().Enable(enable)
+        self._text.Enable(enable)
+        return result
+
+    def _on_focus_change(self, event):
+        self._border = BLOCKS_TO_STORAGE_THEME["accent_hover"] if self._text.HasFocus() else BLOCKS_TO_STORAGE_THEME["border"]
+        self.Refresh(False)
+        event.Skip()
+
+def _apply_rounded_window_shape(window, radius=10):
+    try:
+        size = window.GetClientSize()
+        width = int(size.GetWidth())
+        height = int(size.GetHeight())
+    except Exception:
+        try:
+            width, height = map(int, window.GetClientSize())
+        except Exception:
+            return False
+
+    if width <= 0 or height <= 0:
+        return False
+
+    try:
+        radius_px = max(1, int(_dip(window, radius)))
+    except Exception:
+        radius_px = max(1, int(radius))
+    radius_px = min(radius_px, width // 2, height // 2)
+
+    try:
+        if radius_px <= 1:
+            region = wx.Region(0, 0, width, height)
+        else:
+            region = None
+            for y in range(height):
+                inset = _rounded_scanline_inset(
+                    width,
+                    height,
+                    radius_px,
+                    y,
+                )
+                row_width = max(1, width - inset * 2)
+                row = wx.Region(inset, y, row_width, 1)
+                if region is None:
+                    region = row
+                else:
+                    region.Union(row)
+
+        result = window.SetShape(region)
+        return result is not False
+    except Exception:
+        return False
+
+def _apply_rounded_child_shape(window, radius=10):
+    try:
+        size = window.GetClientSize()
+        width = int(size.GetWidth())
+        height = int(size.GetHeight())
+    except Exception:
+        try:
+            width, height = map(int, window.GetClientSize())
+        except Exception:
+            return False
+
+    if width <= 1 or height <= 1:
+        return False
+
+    try:
+        radius_px = max(1, int(_dip(window, radius)))
+    except Exception:
+        radius_px = max(1, int(radius))
+    radius_px = min(radius_px, width // 2, height // 2)
+
+    if os.name == "nt":
+        region_handle = None
+        try:
+            window_handle = int(window.GetHandle())
+            if not window_handle:
+                return False
+
+            gdi32 = ctypes.windll.gdi32
+            user32 = ctypes.windll.user32
+
+            create_round_region = gdi32.CreateRoundRectRgn
+            create_round_region.argtypes = [
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+            ]
+            create_round_region.restype = ctypes.c_void_p
+
+            set_window_region = user32.SetWindowRgn
+            set_window_region.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_bool,
+            ]
+            set_window_region.restype = ctypes.c_int
+
+            delete_object = gdi32.DeleteObject
+            delete_object.argtypes = [ctypes.c_void_p]
+            delete_object.restype = ctypes.c_int
+
+            diameter = max(2, radius_px * 2)
+            region_handle = create_round_region(
+                0,
+                0,
+                width + 1,
+                height + 1,
+                diameter,
+                diameter,
+            )
+            if not region_handle:
+                return False
+
+            result = set_window_region(
+                ctypes.c_void_p(window_handle),
+                ctypes.c_void_p(region_handle),
+                True,
+            )
+            if result:
+
+                region_handle = None
+                return True
+        except Exception:
+            pass
+        finally:
+            if region_handle:
+                try:
+                    ctypes.windll.gdi32.DeleteObject(
+                        ctypes.c_void_p(region_handle)
+                    )
+                except Exception:
+                    pass
+
+    return _apply_rounded_window_shape(window, radius)
+
+class _PortableAnchoredConsoleHint(wx.Frame):
+
+    def __init__(self, owner, text):
+        style = wx.FRAME_NO_TASKBAR | wx.BORDER_NONE
+        style |= getattr(wx, "FRAME_FLOAT_ON_PARENT", 0)
+        style |= getattr(wx, "FRAME_SHAPED", 0)
+        super().__init__(owner, title="", style=style)
+        _mark_custom_ui_owned(
+            self,
+            f"{CUSTOM_UI_NAME_PREFIX}:PortableConsoleHint",
+        )
+        self._shape_radius = 10
+        self._shape_edge_colour = TOOLTIP_BORDER_COLOUR
+        try:
+            self.SetBackgroundColour(self._shape_edge_colour)
+            self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        except Exception:
+            pass
+
+        panel = RoundedPanel(
+            self,
+            background=BLOCKS_TO_STORAGE_THEME["surface"],
+            border=TOOLTIP_BORDER_COLOUR,
+            radius=self._shape_radius,
+            clear_background=self._shape_edge_colour,
+        )
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        panel.SetSizer(sizer)
+        label = _make_text(panel, text, point_size=8, muted=False)
+        label.Wrap(_dip(panel, 260))
+        sizer.Add(label, 0, wx.ALL | wx.EXPAND, _dip(panel, 10))
+
+        frame_sizer = wx.BoxSizer(wx.VERTICAL)
+        frame_sizer.Add(panel, 1, wx.EXPAND)
+        self.SetSizerAndFit(frame_sizer)
+        self.Bind(wx.EVT_SIZE, self._on_shape_size)
+        _apply_rounded_window_shape(self, self._shape_radius)
+
+    def _on_shape_size(self, event):
+        try:
+            event.Skip()
+        except Exception:
+            pass
+        try:
+            wx.CallAfter(
+                _apply_rounded_window_shape,
+                self,
+                self._shape_radius,
+            )
+        except Exception:
+            _apply_rounded_window_shape(self, self._shape_radius)
+
+    def show_for(self, anchor):
+        try:
+            _apply_rounded_window_shape(self, self._shape_radius)
+            anchor_origin = anchor.ClientToScreen((0, 0))
+            anchor_size = anchor.GetClientSize()
+            hint_size = self.GetSize()
+            x = anchor_origin.x + anchor_size.width + _dip(anchor, 10)
+            y = (
+                anchor_origin.y
+                + max(0, (anchor_size.height - hint_size.height) // 2)
+            )
+
+            display_index = wx.Display.GetFromPoint(
+                wx.Point(anchor_origin.x, anchor_origin.y)
+            )
+            if display_index == wx.NOT_FOUND:
+                display_index = wx.Display.GetFromWindow(anchor)
+            if display_index == wx.NOT_FOUND:
+                display_index = 0
+            work_area = wx.Display(display_index).GetClientArea()
+
+            if x + hint_size.width > work_area.GetRight():
+                x = anchor_origin.x - hint_size.width - _dip(anchor, 10)
+            x = max(
+                work_area.x,
+                min(x, work_area.GetRight() - hint_size.width),
+            )
+            y = max(
+                work_area.y,
+                min(y, work_area.GetBottom() - hint_size.height),
+            )
+            self.Move((x, y))
+
+            show_without_activating = getattr(
+                self,
+                "ShowWithoutActivating",
+                None,
+            )
+            if callable(show_without_activating):
+                show_without_activating()
+            else:
+                self.Show(True)
+            self.Raise()
+            try:
+                wx.CallAfter(
+                    _apply_rounded_window_shape,
+                    self,
+                    self._shape_radius,
+                )
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def dismiss(self):
+        try:
+            self.Hide()
+        except Exception:
+            pass
+
+class _PortableCursorControlHint(wx.Frame):
+
+    def __init__(self, owner):
+        style = wx.FRAME_NO_TASKBAR | wx.BORDER_NONE
+        style |= getattr(wx, "FRAME_FLOAT_ON_PARENT", 0)
+        style |= getattr(wx, "FRAME_SHAPED", 0)
+        super().__init__(owner, title="", style=style)
+        _mark_custom_ui_owned(
+            self,
+            f"{CUSTOM_UI_NAME_PREFIX}:PortableControlHint",
+        )
+        self._shape_radius = 10
+        self._shape_edge_colour = TOOLTIP_BORDER_COLOUR
+        try:
+            self.SetBackgroundColour(self._shape_edge_colour)
+            self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        except Exception:
+            pass
+
+        self._panel = RoundedPanel(
+            self,
+            background=BLOCKS_TO_STORAGE_THEME["surface"],
+            border=TOOLTIP_BORDER_COLOUR,
+            radius=self._shape_radius,
+            clear_background=self._shape_edge_colour,
+        )
+        self._label = _make_text(
+            self._panel,
+            "",
+            point_size=8,
+            muted=False,
+        )
+        panel_sizer = wx.BoxSizer(wx.VERTICAL)
+        panel_sizer.Add(
+            self._label,
+            0,
+            wx.ALL | wx.EXPAND,
+            _dip(self._panel, 10),
+        )
+        self._panel.SetSizer(panel_sizer)
+
+        frame_sizer = wx.BoxSizer(wx.VERTICAL)
+        frame_sizer.Add(self._panel, 1, wx.EXPAND)
+        self.SetSizer(frame_sizer)
+        self.Bind(wx.EVT_SIZE, self._on_shape_size)
+
+    def _on_shape_size(self, event):
+        try:
+            event.Skip()
+        except Exception:
+            pass
+        try:
+            wx.CallAfter(
+                _apply_rounded_window_shape,
+                self,
+                self._shape_radius,
+            )
+        except Exception:
+            _apply_rounded_window_shape(self, self._shape_radius)
+
+    def set_text(self, text):
+        try:
+            self._label.SetLabel(str(text))
+            self._label.Wrap(_dip(self._panel, 300))
+            self._panel.Layout()
+            self.GetSizer().Fit(self)
+            _apply_rounded_window_shape(self, self._shape_radius)
+        except Exception:
+            pass
+
+    def show_at_pointer(self, anchor):
+        try:
+            _apply_rounded_window_shape(self, self._shape_radius)
+            pointer = wx.GetMousePosition()
+            hint_size = self.GetSize()
+            offset_x = _dip(anchor, 16)
+            offset_y = _dip(anchor, 20)
+            x = pointer.x + offset_x
+            y = pointer.y + offset_y
+
+            display_index = wx.Display.GetFromPoint(pointer)
+            if display_index == wx.NOT_FOUND:
+                display_index = wx.Display.GetFromWindow(anchor)
+            if display_index == wx.NOT_FOUND:
+                display_index = 0
+            work_area = wx.Display(display_index).GetClientArea()
+
+            if x + hint_size.width > work_area.GetRight():
+                x = pointer.x - hint_size.width - offset_x
+            if y + hint_size.height > work_area.GetBottom():
+                y = pointer.y - hint_size.height - offset_y
+            x = max(
+                work_area.x,
+                min(x, work_area.GetRight() - hint_size.width),
+            )
+            y = max(
+                work_area.y,
+                min(y, work_area.GetBottom() - hint_size.height),
+            )
+            self.Move((x, y))
+
+            show_without_activating = getattr(
+                self,
+                "ShowWithoutActivating",
+                None,
+            )
+            if callable(show_without_activating):
+                show_without_activating()
+            else:
+                self.Show(True)
+            self.Raise()
+            try:
+                wx.CallAfter(
+                    _apply_rounded_window_shape,
+                    self,
+                    self._shape_radius,
+                )
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def dismiss(self):
+        try:
+            self.Hide()
+        except Exception:
+            pass
+
+if os.name == "nt":
+    class _WinPoint(ctypes.Structure):
+        _fields_ = [
+            ("x", ctypes.c_long),
+            ("y", ctypes.c_long),
+        ]
+
+    class _WinSize(ctypes.Structure):
+        _fields_ = [
+            ("cx", ctypes.c_long),
+            ("cy", ctypes.c_long),
+        ]
+
+    class _WinBlendFunction(ctypes.Structure):
+        _fields_ = [
+            ("BlendOp", ctypes.c_ubyte),
+            ("BlendFlags", ctypes.c_ubyte),
+            ("SourceConstantAlpha", ctypes.c_ubyte),
+            ("AlphaFormat", ctypes.c_ubyte),
+        ]
+
+    class _WinBitmapInfoHeader(ctypes.Structure):
+        _fields_ = [
+            ("biSize", ctypes.c_uint32),
+            ("biWidth", ctypes.c_int32),
+            ("biHeight", ctypes.c_int32),
+            ("biPlanes", ctypes.c_uint16),
+            ("biBitCount", ctypes.c_uint16),
+            ("biCompression", ctypes.c_uint32),
+            ("biSizeImage", ctypes.c_uint32),
+            ("biXPelsPerMeter", ctypes.c_int32),
+            ("biYPelsPerMeter", ctypes.c_int32),
+            ("biClrUsed", ctypes.c_uint32),
+            ("biClrImportant", ctypes.c_uint32),
+        ]
+
+    class _WinBitmapInfo(ctypes.Structure):
+        _fields_ = [
+            ("bmiHeader", _WinBitmapInfoHeader),
+            ("bmiColors", ctypes.c_uint32 * 3),
+        ]
+else:
+    _WinPoint = None
+    _WinSize = None
+    _WinBlendFunction = None
+    _WinBitmapInfoHeader = None
+    _WinBitmapInfo = None
+
+def _wx_colour_tuple(colour, alpha=255):
+    return (
+        int(colour.Red()),
+        int(colour.Green()),
+        int(colour.Blue()),
+        int(alpha),
+    )
+
+def _load_layered_tooltip_font(pixel_size):
+    if ImageFont is None:
+        return None
+
+    candidates = []
+    windows_root = os.environ.get("WINDIR", "").strip()
+    if windows_root:
+        font_root = Path(windows_root) / "Fonts"
+        candidates.extend(
+            (
+                font_root / "segoeui.ttf",
+                font_root / "arial.ttf",
+                font_root / "tahoma.ttf",
+            )
+        )
+
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return ImageFont.truetype(
+                    str(candidate),
+                    max(8, int(pixel_size)),
+                )
+        except Exception:
+            continue
+
+    try:
+        return ImageFont.load_default()
+    except Exception:
+        return None
+
+def _pil_text_width(draw, text, font):
+    try:
+        return max(
+            0,
+            int(round(draw.textlength(str(text), font=font))),
+        )
+    except Exception:
+        try:
+            box = draw.textbbox((0, 0), str(text), font=font)
+            return max(0, int(box[2] - box[0]))
+        except Exception:
+            return 0
+
+def _wrap_pil_tooltip_text(draw, text, font, max_width):
+    lines = []
+    paragraphs = str(text).replace("\r\n", "\n").split("\n")
+
+    for paragraph in paragraphs:
+        words = paragraph.split()
+        if not words:
+            lines.append("")
+            continue
+
+        current = words[0]
+        for word in words[1:]:
+            candidate = f"{current} {word}"
+            if _pil_text_width(draw, candidate, font) <= max_width:
+                current = candidate
+            else:
+                lines.append(current)
+                current = word
+        lines.append(current)
+
+    return lines or [""]
+
+def _premultiplied_bgra_bytes(image):
+    rgba = image.convert("RGBA").tobytes()
+    output = bytearray(len(rgba))
+
+    for index in range(0, len(rgba), 4):
+        red = rgba[index]
+        green = rgba[index + 1]
+        blue = rgba[index + 2]
+        alpha = rgba[index + 3]
+        output[index] = (blue * alpha + 127) // 255
+        output[index + 1] = (green * alpha + 127) // 255
+        output[index + 2] = (red * alpha + 127) // 255
+        output[index + 3] = alpha
+
+    return bytes(output)
+
+class _WindowsLayeredTooltipFrame(wx.Frame):
+
+    _SUPERSAMPLE = 4
+
+    def __init__(self, owner, max_text_width):
+        style = wx.FRAME_NO_TASKBAR | wx.BORDER_NONE
+        style |= getattr(wx, "FRAME_FLOAT_ON_PARENT", 0)
+        super().__init__(owner, title="", size=(1, 1), style=style)
+        _mark_custom_ui_owned(
+            self,
+            f"{CUSTOM_UI_NAME_PREFIX}:LayeredHint",
+        )
+        self._owner = owner
+        self._max_text_width = max(80, int(max_text_width))
+        self._text = ""
+        self._rendered_image = None
+        self._rendered_size = (1, 1)
+        self._layered_ready = self._configure_layered_window()
+        self._fallback = None
+        try:
+            self.Hide()
+        except Exception:
+            pass
+
+    def _configure_layered_window(self):
+        if os.name != "nt":
+            return False
+        try:
+            handle = int(self.GetHandle())
+            if not handle:
+                return False
+
+            user32 = ctypes.windll.user32
+            get_window_long = getattr(
+                user32,
+                "GetWindowLongPtrW",
+                user32.GetWindowLongW,
+            )
+            set_window_long = getattr(
+                user32,
+                "SetWindowLongPtrW",
+                user32.SetWindowLongW,
+            )
+            try:
+                get_window_long.argtypes = [
+                    ctypes.c_void_p,
+                    ctypes.c_int,
+                ]
+                get_window_long.restype = ctypes.c_ssize_t
+                set_window_long.argtypes = [
+                    ctypes.c_void_p,
+                    ctypes.c_int,
+                    ctypes.c_ssize_t,
+                ]
+                set_window_long.restype = ctypes.c_ssize_t
+            except Exception:
+                pass
+
+            GWL_STYLE = -16
+            GWL_EXSTYLE = -20
+
+            WS_BORDER = 0x00800000
+            WS_DLGFRAME = 0x00400000
+            WS_THICKFRAME = 0x00040000
+            WS_CAPTION = 0x00C00000
+
+            WS_EX_TRANSPARENT = 0x00000020
+            WS_EX_TOOLWINDOW = 0x00000080
+            WS_EX_WINDOWEDGE = 0x00000100
+            WS_EX_CLIENTEDGE = 0x00000200
+            WS_EX_LAYERED = 0x00080000
+            WS_EX_NOACTIVATE = 0x08000000
+
+            style = int(
+                get_window_long(
+                    ctypes.c_void_p(handle),
+                    GWL_STYLE,
+                )
+            )
+            style &= ~(
+                WS_BORDER
+                | WS_DLGFRAME
+                | WS_THICKFRAME
+                | WS_CAPTION
+            )
+            set_window_long(
+                ctypes.c_void_p(handle),
+                GWL_STYLE,
+                ctypes.c_ssize_t(style),
+            )
+
+            ex_style = int(
+                get_window_long(
+                    ctypes.c_void_p(handle),
+                    GWL_EXSTYLE,
+                )
+            )
+            ex_style &= ~(WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE)
+            ex_style |= (
+                WS_EX_LAYERED
+                | WS_EX_TOOLWINDOW
+                | WS_EX_NOACTIVATE
+                | WS_EX_TRANSPARENT
+            )
+            set_window_long(
+                ctypes.c_void_p(handle),
+                GWL_EXSTYLE,
+                ctypes.c_ssize_t(ex_style),
+            )
+
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_NOZORDER = 0x0004
+            SWP_NOACTIVATE = 0x0010
+            SWP_FRAMECHANGED = 0x0020
+            user32.SetWindowPos(
+                ctypes.c_void_p(handle),
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOSIZE
+                | SWP_NOMOVE
+                | SWP_NOZORDER
+                | SWP_NOACTIVATE
+                | SWP_FRAMECHANGED,
+            )
+            return True
+        except Exception:
+            return False
+
+    def _render_text(self, text):
+        if (
+            Image is None
+            or ImageDraw is None
+            or ImageFont is None
+        ):
+            self._rendered_image = None
+            self._rendered_size = (1, 1)
+            return False
+
+        try:
+            scale = self._SUPERSAMPLE
+            padding = max(6, _dip(self, 10))
+            radius = max(5, _dip(self, 10))
+            border_width = max(
+                1,
+                _dip(self, TOOLTIP_BORDER_WIDTH),
+            )
+            font_size = max(9, _dip(self, 11))
+            max_text_width = max(
+                80,
+                _dip(self, self._max_text_width),
+            )
+
+            font = _load_layered_tooltip_font(font_size * scale)
+            if font is None:
+                return False
+
+            measure_image = Image.new(
+                "RGBA",
+                (max_text_width * scale, 64 * scale),
+                (0, 0, 0, 0),
+            )
+            measure_draw = ImageDraw.Draw(measure_image)
+            lines = _wrap_pil_tooltip_text(
+                measure_draw,
+                text,
+                font,
+                max_text_width * scale,
+            )
+
+            try:
+                sample_box = measure_draw.textbbox(
+                    (0, 0),
+                    "Ag",
+                    font=font,
+                )
+                line_height = max(
+                    1,
+                    int(sample_box[3] - sample_box[1]),
+                )
+                baseline_offset = int(sample_box[1])
+            except Exception:
+                line_height = max(1, font_size * scale)
+                baseline_offset = 0
+
+            line_gap = max(1, _dip(self, 2)) * scale
+            measured_widths = [
+                _pil_text_width(
+                    measure_draw,
+                    line,
+                    font,
+                )
+                for line in lines
+            ]
+            text_width = max(measured_widths or [1])
+            text_height = (
+                line_height * len(lines)
+                + line_gap * max(0, len(lines) - 1)
+            )
+
+            final_width = max(
+                2,
+                int(round(text_width / scale))
+                + padding * 2,
+            )
+            final_height = max(
+                2,
+                int(round(text_height / scale))
+                + padding * 2,
+            )
+
+            render_width = final_width * scale
+            render_height = final_height * scale
+            image = Image.new(
+                "RGBA",
+                (render_width, render_height),
+                (0, 0, 0, 0),
+            )
+            draw = ImageDraw.Draw(image)
+
+            border_rgba = _wx_colour_tuple(
+                TOOLTIP_BORDER_COLOUR,
+            )
+            surface_rgba = _wx_colour_tuple(
+                BLOCKS_TO_STORAGE_THEME["surface"],
+            )
+            text_rgba = _wx_colour_tuple(
+                BLOCKS_TO_STORAGE_THEME["text"],
+            )
+
+            outer_radius = radius * scale
+            draw.rounded_rectangle(
+                (
+                    0,
+                    0,
+                    render_width - 1,
+                    render_height - 1,
+                ),
+                radius=outer_radius,
+                fill=border_rgba,
+            )
+
+            inset = border_width * scale
+            draw.rounded_rectangle(
+                (
+                    inset,
+                    inset,
+                    render_width - 1 - inset,
+                    render_height - 1 - inset,
+                ),
+                radius=max(1, outer_radius - inset),
+                fill=surface_rgba,
+            )
+
+            text_x = padding * scale
+            text_y = padding * scale
+            for line in lines:
+                draw.text(
+                    (
+                        text_x,
+                        text_y - baseline_offset,
+                    ),
+                    line,
+                    font=font,
+                    fill=text_rgba,
+                )
+                text_y += line_height + line_gap
+
+            try:
+                resampling = Image.Resampling.LANCZOS
+            except Exception:
+                resampling = Image.LANCZOS
+            image = image.resize(
+                (final_width, final_height),
+                resampling,
+            )
+
+            self._rendered_image = image
+            self._rendered_size = (
+                final_width,
+                final_height,
+            )
+            try:
+                self.SetSize(self._rendered_size)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            self._rendered_image = None
+            self._rendered_size = (1, 1)
+            return False
+
+    def _update_layered_window(self, x, y):
+        if (
+            not self._layered_ready
+            or self._rendered_image is None
+            or os.name != "nt"
+        ):
+            return False
+
+        screen_dc = None
+        memory_dc = None
+        bitmap = None
+        old_bitmap = None
+
+        try:
+            width, height = self._rendered_size
+            if width <= 0 or height <= 0:
+                return False
+
+            handle = int(self.GetHandle())
+            if not handle:
+                return False
+
+            user32 = ctypes.windll.user32
+            gdi32 = ctypes.windll.gdi32
+
+            user32.GetDC.restype = ctypes.c_void_p
+            gdi32.CreateCompatibleDC.restype = ctypes.c_void_p
+            gdi32.CreateDIBSection.restype = ctypes.c_void_p
+            gdi32.SelectObject.restype = ctypes.c_void_p
+
+            screen_dc = user32.GetDC(None)
+            if not screen_dc:
+                return False
+
+            memory_dc = gdi32.CreateCompatibleDC(
+                ctypes.c_void_p(screen_dc)
+            )
+            if not memory_dc:
+                return False
+
+            bitmap_info = _WinBitmapInfo()
+            bitmap_info.bmiHeader.biSize = ctypes.sizeof(
+                _WinBitmapInfoHeader
+            )
+            bitmap_info.bmiHeader.biWidth = int(width)
+            bitmap_info.bmiHeader.biHeight = -int(height)
+            bitmap_info.bmiHeader.biPlanes = 1
+            bitmap_info.bmiHeader.biBitCount = 32
+            bitmap_info.bmiHeader.biCompression = 0
+            bitmap_info.bmiHeader.biSizeImage = (
+                int(width) * int(height) * 4
+            )
+
+            pixel_pointer = ctypes.c_void_p()
+            bitmap = gdi32.CreateDIBSection(
+                ctypes.c_void_p(screen_dc),
+                ctypes.byref(bitmap_info),
+                0,
+                ctypes.byref(pixel_pointer),
+                None,
+                0,
+            )
+            if not bitmap or not pixel_pointer.value:
+                return False
+
+            pixels = _premultiplied_bgra_bytes(
+                self._rendered_image
+            )
+            ctypes.memmove(
+                pixel_pointer,
+                pixels,
+                len(pixels),
+            )
+
+            old_bitmap = gdi32.SelectObject(
+                ctypes.c_void_p(memory_dc),
+                ctypes.c_void_p(bitmap),
+            )
+
+            destination = _WinPoint(int(x), int(y))
+            source = _WinPoint(0, 0)
+            size = _WinSize(int(width), int(height))
+            blend = _WinBlendFunction(
+                0,
+                0,
+                255,
+                1,
+            )
+
+            user32.UpdateLayeredWindow.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.POINTER(_WinPoint),
+                ctypes.POINTER(_WinSize),
+                ctypes.c_void_p,
+                ctypes.POINTER(_WinPoint),
+                ctypes.c_uint32,
+                ctypes.POINTER(_WinBlendFunction),
+                ctypes.c_uint32,
+            ]
+            user32.UpdateLayeredWindow.restype = ctypes.c_int
+
+            updated = user32.UpdateLayeredWindow(
+                ctypes.c_void_p(handle),
+                ctypes.c_void_p(screen_dc),
+                ctypes.byref(destination),
+                ctypes.byref(size),
+                ctypes.c_void_p(memory_dc),
+                ctypes.byref(source),
+                0,
+                ctypes.byref(blend),
+                0x00000002,
+            )
+            if not updated:
+                return False
+
+            user32.ShowWindow(
+                ctypes.c_void_p(handle),
+                4,
+            )
+            user32.SetWindowPos(
+                ctypes.c_void_p(handle),
+                None,
+                int(x),
+                int(y),
+                int(width),
+                int(height),
+                0x0010 | 0x0040,
+            )
+            return True
+        except Exception:
+            return False
+        finally:
+            try:
+                if old_bitmap and memory_dc:
+                    ctypes.windll.gdi32.SelectObject(
+                        ctypes.c_void_p(memory_dc),
+                        ctypes.c_void_p(old_bitmap),
+                    )
+            except Exception:
+                pass
+            try:
+                if bitmap:
+                    ctypes.windll.gdi32.DeleteObject(
+                        ctypes.c_void_p(bitmap)
+                    )
+            except Exception:
+                pass
+            try:
+                if memory_dc:
+                    ctypes.windll.gdi32.DeleteDC(
+                        ctypes.c_void_p(memory_dc)
+                    )
+            except Exception:
+                pass
+            try:
+                if screen_dc:
+                    ctypes.windll.user32.ReleaseDC(
+                        None,
+                        ctypes.c_void_p(screen_dc),
+                    )
+            except Exception:
+                pass
+
+    def _hide_layered_window(self):
+        try:
+            handle = int(self.GetHandle())
+            if handle and os.name == "nt":
+                ctypes.windll.user32.ShowWindow(
+                    ctypes.c_void_p(handle),
+                    0,
+                )
+                return
+        except Exception:
+            pass
+        try:
+            self.Hide()
+        except Exception:
+            pass
+
+    def dismiss(self):
+        self._hide_layered_window()
+        fallback = self._fallback
+        if fallback is not None:
+            try:
+                fallback.dismiss()
+            except Exception:
+                pass
+
+class _WindowsLayeredAnchoredConsoleHint(
+    _WindowsLayeredTooltipFrame
+):
+
+    def __init__(self, owner, text):
+        super().__init__(owner, max_text_width=260)
+        self._text = str(text)
+        self._render_text(self._text)
+
+    def show_for(self, anchor):
+        try:
+            anchor_origin = anchor.ClientToScreen((0, 0))
+            anchor_size = anchor.GetClientSize()
+            width, height = self._rendered_size
+            x = anchor_origin.x + anchor_size.width + _dip(anchor, 10)
+            y = anchor_origin.y + max(
+                0,
+                (anchor_size.height - height) // 2,
+            )
+
+            display_index = wx.Display.GetFromPoint(
+                wx.Point(anchor_origin.x, anchor_origin.y)
+            )
+            if display_index == wx.NOT_FOUND:
+                display_index = wx.Display.GetFromWindow(anchor)
+            if display_index == wx.NOT_FOUND:
+                display_index = 0
+            work_area = wx.Display(display_index).GetClientArea()
+
+            if x + width > work_area.GetRight():
+                x = anchor_origin.x - width - _dip(anchor, 10)
+            x = max(
+                work_area.x,
+                min(x, work_area.GetRight() - width),
+            )
+            y = max(
+                work_area.y,
+                min(y, work_area.GetBottom() - height),
+            )
+
+            if self._update_layered_window(x, y):
+                if self._fallback is not None:
+                    self._fallback.dismiss()
+                return
+        except Exception:
+            pass
+
+        if self._fallback is None:
+            self._fallback = _PortableAnchoredConsoleHint(
+                self._owner,
+                self._text,
+            )
+        self._fallback.show_for(anchor)
+
+class _WindowsLayeredCursorControlHint(
+    _WindowsLayeredTooltipFrame
+):
+
+    def __init__(self, owner):
+        super().__init__(owner, max_text_width=300)
+
+    def set_text(self, text):
+        self._text = str(text)
+        self._render_text(self._text)
+        if self._fallback is not None:
+            self._fallback.set_text(self._text)
+
+    def show_at_pointer(self, anchor):
+        try:
+            pointer = wx.GetMousePosition()
+            width, height = self._rendered_size
+            offset_x = _dip(anchor, 16)
+            offset_y = _dip(anchor, 20)
+            x = pointer.x + offset_x
+            y = pointer.y + offset_y
+
+            display_index = wx.Display.GetFromPoint(pointer)
+            if display_index == wx.NOT_FOUND:
+                display_index = wx.Display.GetFromWindow(anchor)
+            if display_index == wx.NOT_FOUND:
+                display_index = 0
+            work_area = wx.Display(display_index).GetClientArea()
+
+            if x + width > work_area.GetRight():
+                x = pointer.x - width - offset_x
+            if y + height > work_area.GetBottom():
+                y = pointer.y - height - offset_y
+            x = max(
+                work_area.x,
+                min(x, work_area.GetRight() - width),
+            )
+            y = max(
+                work_area.y,
+                min(y, work_area.GetBottom() - height),
+            )
+
+            if self._update_layered_window(x, y):
+                if self._fallback is not None:
+                    self._fallback.dismiss()
+                return
+        except Exception:
+            pass
+
+        if self._fallback is None:
+            self._fallback = _PortableCursorControlHint(
+                self._owner
+            )
+            self._fallback.set_text(self._text)
+        self._fallback.show_at_pointer(anchor)
+
+if (
+    os.name == "nt"
+    and Image is not None
+    and ImageDraw is not None
+    and ImageFont is not None
+):
+    AnchoredConsoleHint = _WindowsLayeredAnchoredConsoleHint
+    CursorControlHint = _WindowsLayeredCursorControlHint
+else:
+    AnchoredConsoleHint = _PortableAnchoredConsoleHint
+    CursorControlHint = _PortableCursorControlHint
+
+class ModernSectionButton(ModernButton):
+
+    def __init__(self, parent, label, value=True):
+        self._section_label = str(label)
+        self._value = bool(value)
+        super().__init__(
+            parent,
+            "",
+            primary=False,
+            compact=True,
+            content_alignment="left",
+        )
+        self.Bind(wx.EVT_BUTTON, self._toggle_from_button)
+        self._sync_label()
+
+    def _sync_label(self):
+        marker = "▼" if self._value else "▶"
+        ModernButton.SetLabel(self, f"{marker} {self._section_label}")
+
+    def SetSectionLabel(self, label):
+        self._section_label = str(label)
+        self._sync_label()
+
+    def GetValue(self):
+        return bool(self._value)
+
+    def SetValue(self, value):
+        self._value = bool(value)
+        self._sync_label()
+
+    def _toggle_from_button(self, _event):
+        self._value = not self._value
+        self._sync_label()
+        _emit_command_event(self, wx.EVT_TOGGLEBUTTON)
+
+class ModernFileCheckRow(RoundedPanel):
+
+    def __init__(self, parent, label, value=False):
+        super().__init__(
+            parent,
+            background=BLOCKS_TO_STORAGE_THEME["surface"],
+            border=BLOCKS_TO_STORAGE_THEME["border_soft"],
+            radius=9,
+        )
+        text = str(label)
+        parts = [part.strip() for part in text.split(" | ") if part.strip()]
+        title = parts[0] if parts else text
+        details = " • ".join(parts[1:])
+
+        self._check = ModernCheckBox(self, title, value)
+        self._details = _make_text(self, details, point_size=8, muted=True)
+        self._details.Wrap(_dip(self, 430))
+
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.AddSpacer(
+            _dip(
+                self,
+                max(
+                    0,
+                    9 - UI_CHECKBOX_GAP_REDUCTION,
+                ),
+            )
+        )
+        sizer.Add(
+            self._check,
+            0,
+            wx.LEFT | wx.RIGHT | wx.EXPAND,
+            _dip(self, 9),
+        )
+        if details:
+            sizer.Add(
+                self._details,
+                0,
+                wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+                _dip(self, 10),
+            )
+        else:
+            sizer.AddSpacer(_dip(self, 7))
+        self.SetSizer(sizer)
+
+        self.Bind(wx.EVT_SIZE, self._on_size)
+        for target in (self, self._details):
+            target.SetCursor(wx.Cursor(wx.CURSOR_HAND))
+            target.Bind(wx.EVT_LEFT_UP, self._on_activate)
+
+    def GetValue(self):
+        return self._check.GetValue()
+
+    def SetValue(self, value):
+        self._check.SetValue(value)
+
+    def _on_activate(self, _event):
+        self._check.SetValue(not self._check.GetValue())
+        _emit_command_event(self._check, wx.EVT_CHECKBOX)
+
+    def _on_size(self, event):
+        try:
+            width = max(_dip(self, 220), self.GetClientSize().width - _dip(self, 24))
+            self._details.Wrap(width)
+            self.Layout()
+        except Exception:
+            pass
+        event.Skip()
+
+class DarkMultiChoiceDialog(wx.Dialog):
+
+    def __init__(self, parent, title, message, choices):
+        super().__init__(
+            parent,
+            title=title,
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
+        )
+        _mark_custom_ui_owned(self, f"{CUSTOM_UI_NAME_PREFIX}:BlocksToStorageFileSelection")
+        self.SetBackgroundColour(BLOCKS_TO_STORAGE_THEME["passive_window"])
+        self._checks = []
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        heading = _make_text(self, title.upper(), point_size=13, bold=True)
+        outer.Add(heading, 0, wx.ALL | wx.EXPAND, _dip(self, 14))
+        description = _make_text(self, message, point_size=9, muted=True)
+        description.Wrap(500)
+        outer.Add(
+            description,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            _dip(self, 14),
+        )
+
+        viewport = ModernScrollViewport(
+            self,
+            background=BLOCKS_TO_STORAGE_THEME["passive_window"],
+        )
+        viewport.SetMinSize((-1, _dip(self, 260)))
+        content = viewport.GetContentWindow()
+        content_sizer = wx.BoxSizer(wx.VERTICAL)
+        viewport.SetContentSizer(content_sizer)
+        for label in choices:
+            check = ModernFileCheckRow(content, str(label), False)
+            self._checks.append(check)
+            content_sizer.Add(
+                check,
+                0,
+                wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+                _dip(self, 10),
+            )
+        content_sizer.AddSpacer(_dip(self, 4))
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        row.Add(viewport, 1, wx.EXPAND)
+        scrollbar = ModernScrollBar(self, viewport)
+        row.Add(scrollbar, 0, wx.LEFT | wx.EXPAND, _dip(self, 6))
+        outer.Add(
+            row,
+            1,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            _dip(self, 14),
+        )
+
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        back = ModernButton(self, "Back")
+        accept = ModernButton(self, "Continue", primary=True)
+        back.Bind(wx.EVT_BUTTON, lambda _event: self.EndModal(wx.ID_CANCEL))
+        accept.Bind(wx.EVT_BUTTON, lambda _event: self.EndModal(wx.ID_OK))
+        buttons.Add(back, 1, wx.RIGHT | wx.EXPAND, _dip(self, 8))
+        buttons.Add(accept, 1, wx.EXPAND)
+        outer.Add(
+            buttons,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            _dip(self, 14),
+        )
+
+        self.SetSizer(outer)
+        self.SetMinSize((_dip(self, 500), _dip(self, 410)))
+        self.SetSize((_dip(self, 560), _dip(self, 500)))
+        try:
+            self.CentreOnParent()
+        except Exception:
+            self.Centre()
+        wx.CallAfter(viewport._modern_sync_layout)
+        wx.CallAfter(scrollbar.sync)
+
+    def GetSelections(self):
+        return tuple(
+            index
+            for index, check in enumerate(self._checks)
+            if check.GetValue()
+        )
+
+class BlocksToStorageWindow(wx.Frame):
+
+    def __init__(self, owner, host):
+        style = wx.DEFAULT_FRAME_STYLE
+        style |= getattr(wx, "FRAME_FLOAT_ON_PARENT", 0)
+        super().__init__(owner, title="Blocks to Storage", size=FLOATING_DEFAULT_SIZE, style=style)
+        _mark_custom_ui_owned(self, f"{CUSTOM_UI_NAME_PREFIX}:BlocksToStorage")
+        self._host_ref = weakref.ref(host)
+        self.SetBackgroundColour(BLOCKS_TO_STORAGE_THEME["window"])
+        self.SetMinSize((_dip(self, FLOATING_MIN_SIZE[0]), _dip(self, FLOATING_MIN_SIZE[1])))
+        self.Bind(wx.EVT_CLOSE, self._on_close)
+        self.Bind(wx.EVT_SHOW, self._on_show)
+
+    def _on_close(self, event):
+        host = self._host_ref()
+        owner_closing = False
+        try:
+            owner = self.GetParent()
+            owner_closing = bool(owner is not None and owner.IsBeingDeleted())
+        except Exception:
+            owner_closing = False
+        if (
+            host is not None
+            and not getattr(host, "_destroying", False)
+            and not owner_closing
+            and event.CanVeto()
+        ):
+            self.Hide()
+            host._update_launcher_status(False)
+            event.Veto()
+            return
+        event.Skip()
+
+    def _on_show(self, event):
+        host = self._host_ref()
+        if host is not None:
+            host._update_launcher_status(bool(event.IsShown()))
+        event.Skip()
+
 class PluginClassName(wx.Panel, DefaultOperationUI):
+    SETTINGS_VIEWPORT_HEIGHT = 310
+    SETTINGS_GROW_PROPORTION = 4
+    CONSOLE_GROW_PROPORTION = 1
+    CONSOLE_MIN_TEXT_HEIGHT = 150
+    CONSOLE_MIN_CARD_HEIGHT = 194
+    FLOATING_CONSOLE_VISIBLE_MIN_HEIGHT = 720
+    CONSOLE_TOOLTIP_DELAY_MS = 650
+    CONTROL_TOOLTIP_DELAY_MS = 550
 
     SINGLE_CONTAINER_SLOT_COUNT = 27
     DOUBLE_CHEST_SLOT_COUNT = 54
@@ -63,9 +5848,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     LARGE_SELECTION_WARNING_THRESHOLD = 500000
     DEFAULT_GROUP_SPACING = 1
     MAX_GROUP_SPACING = 8
-    SETTINGS_PANEL_MIN_HEIGHT = 360
-    SETTINGS_PANEL_DEFAULT_HEIGHT = 440
-    SETTINGS_PANEL_MAX_HEIGHT = 620
 
     FOUND_ENTRIES_FILENAME = "Found Entries.BTSP"
     CONVERSION_ENTRIES_FILENAME = "Conversion Entries.BTSP"
@@ -73,7 +5855,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     BUILT_IN_INTEGRATED_SOURCE_LABEL = "Built-in integrated entry"
     INSTALLED_LANGUAGE_SOURCE_LABEL = "Installed en_US.lang"
     SETTINGS_CONFIG_FILENAME = "Blocks to Storage.config"
-    SETTINGS_CONFIG_FORMAT_VERSION = 1
+    SETTINGS_CONFIG_FORMAT_VERSION = 2
     SETTINGS_SAVE_DELAY_MS = 500
     MAX_SETTINGS_CONFIG_BYTES = 1024 * 1024
 
@@ -134,25 +5916,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     NESTED_SHULKER_MODE_PRACTICAL = "Balanced - large groups only"
     NESTED_SHULKER_MODE_COMPACT = "Compact - all groups"
 
-    SHULKER_COLORS = [
-        "default",
-        "white",
-        "orange",
-        "magenta",
-        "light_blue",
-        "yellow",
-        "lime",
-        "pink",
-        "gray",
-        "light_gray",
-        "cyan",
-        "purple",
-        "blue",
-        "brown",
-        "green",
-        "red",
-        "black",
-    ]
+    SHULKER_COLORS = SHULKER_COLOR_CHOICES
 
     VALUABLE_ITEM_FRAME_BLOCKS = {
         "minecraft:ancient_debris",
@@ -2973,12 +8737,40 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         wx.Panel.__init__(self, parent)
         DefaultOperationUI.__init__(self, parent, canvas, world, options_path)
 
+        self._selection = BlockSelectionBehaviour(self.canvas)
         self._world_platform = getattr(world.level_wrapper, "platform", "universal")
         self._world_version = getattr(world.level_wrapper, "version", None)
         self._scan_order: List[str] = []
-
         self._report_lines: List[str] = []
-        self._last_report_text: str = ""
+        self._last_report_text = ""
+
+        self._plugin_window = None
+        self._window_has_been_shown = False
+        self._destroying = False
+        self._console_visible = True
+        self._scroll_refresh_pending = False
+        self._scroll_refresh_call = None
+        self._window_geometry_events_ready = False
+        self._last_normal_window_size = list(FLOATING_DEFAULT_SIZE)
+        self._last_manage_dialog_size = list(MANAGE_DIALOG_DEFAULT_SIZE)
+        self._operation_running = False
+        self._operation_ui_generation = 0
+        self._active_operation_ui_generation = 0
+        self._operation_button_restore_call = None
+        self._control_help_window = None
+        self._control_help_call = None
+        self._control_help_anchor_ref = None
+        self._control_help_text = ""
+
+        self._tooltips_suspended = False
+        self._console_help_window = None
+        self._console_help_call = None
+        self._console_help_hovered = False
+        self._console_help_text = (
+            "Shows the current Blocks to Storage report. Click or focus the "
+            "console to read, select, and copy text without the help bubble remaining open."
+        )
+        self._storage_icon_cache = AmuletStorageIconCache()
 
         self._fast_scan_failed = False
         self._fast_scan_fail_reason = ""
@@ -3050,695 +8842,2027 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         ] = {}
 
         self._configure_tooltips()
+        self._build_launcher_ui()
+        self._build_floating_ui()
+        self._initialize_settings_persistence()
+        self._update_option_visibility()
+        self._bind_floating_window_geometry_events()
+        self.Bind(wx.EVT_WINDOW_DESTROY, self._on_host_destroy)
+        try:
+            wx.CallAfter(self._show_plugin_window)
+        except Exception:
+            self._show_plugin_window()
 
-        self._sizer = wx.BoxSizer(wx.VERTICAL)
+    def _build_launcher_ui(self):
+        outer = wx.BoxSizer(wx.VERTICAL)
+        self.SetSizer(outer)
+        margin = 6
+        title = wx.StaticText(self, label="Blocks to Storage")
+        try:
+            font = title.GetFont()
+            font.SetPointSize(max(font.GetPointSize(), 10))
+            font.SetWeight(wx.FONTWEIGHT_BOLD)
+            title.SetFont(font)
+        except Exception:
+            pass
+        outer.Add(title, 0, wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND, margin)
+        description = wx.StaticText(self, label="Floating interface.")
+        outer.Add(description, 0, wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND, margin)
+        self.open_window_button = ModernButton(
+            self,
+            "Open Window",
+            primary=True,
+            compact=True,
+        )
+        self.open_window_button.Bind(wx.EVT_BUTTON, self._show_plugin_window)
+        outer.Add(
+            self.open_window_button,
+            0,
+            wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND,
+            margin,
+        )
+        self.launcher_status = wx.StaticText(self, label="Opens automatically.")
+        outer.Add(self.launcher_status, 0, wx.ALL | wx.EXPAND, margin)
+        self.SetMinSize((150, 130))
+        self.SetSize((150, 130))
 
-        self.settings_panel = wx.ScrolledWindow(self, style=wx.VSCROLL)
-        self.settings_panel.SetScrollRate(0, 20)
-        self.settings_panel.SetMinSize((320, self.SETTINGS_PANEL_MIN_HEIGHT))
-        self.settings_panel.SetInitialSize((-1, self.SETTINGS_PANEL_DEFAULT_HEIGHT))
+    def _create_card(self, parent, title, subtitle=None):
+        card = RoundedPanel(
+            parent,
+            background=BLOCKS_TO_STORAGE_THEME["passive_surface"],
+            border=BLOCKS_TO_STORAGE_THEME["passive_border"],
+            radius=12,
+        )
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        card.SetSizer(sizer)
+        heading = _make_text(card, title.upper(), point_size=9, bold=True)
+        sizer.Add(
+            heading,
+            0,
+            wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND,
+            UI_CARD_PADDING,
+        )
+        if subtitle:
+            subtitle_control = _make_wrapped_text(
+                card,
+                subtitle,
+                point_size=8,
+                muted=True,
+            )
+            sizer.Add(
+                subtitle_control,
+                0,
+                wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND,
+                UI_CARD_PADDING,
+            )
+        sizer.AddSpacer(_dip(card, 6))
+        return card, sizer
+
+    def _create_collapsible_card(self, parent, label, subtitle=None, expanded=True, parent_sizer=None):
+        card = RoundedPanel(
+            parent,
+            background=BLOCKS_TO_STORAGE_THEME["passive_surface"],
+            border=BLOCKS_TO_STORAGE_THEME["passive_border"],
+            radius=12,
+        )
+        card_sizer = wx.BoxSizer(wx.VERTICAL)
+        card.SetSizer(card_sizer)
+        header = ModernSectionButton(card, label, expanded)
+        card_sizer.Add(
+            header,
+            0,
+            wx.ALL | wx.EXPAND,
+            _dip(card, UI_CARD_PADDING),
+        )
+        if subtitle:
+            subtitle_control = _make_wrapped_text(
+                card,
+                subtitle,
+                point_size=8,
+                muted=True,
+            )
+            card_sizer.Add(
+                subtitle_control,
+                0,
+                wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+                _dip(card, UI_CARD_PADDING),
+            )
+
+        content_fill = card.GetBackgroundColour()
+        content_panel = RoundedPanel(
+            card,
+            background=content_fill,
+            border=content_fill,
+            radius=UI_COLLAPSIBLE_CONTENT_RADIUS,
+        )
+
+        def reshape_content_panel(event=None):
+            _apply_rounded_child_shape(
+                content_panel,
+                UI_COLLAPSIBLE_CONTENT_RADIUS,
+            )
+            if event is not None:
+                event.Skip()
+
+        content_panel.Bind(
+            wx.EVT_SIZE,
+            reshape_content_panel,
+        )
+        try:
+            wx.CallAfter(reshape_content_panel)
+        except Exception:
+            pass
+
+        content_sizer = wx.BoxSizer(wx.VERTICAL)
+        content_panel.SetSizer(content_sizer)
+
+        card_sizer.Add(
+            content_panel,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            _dip(card, UI_COLLAPSIBLE_CONTENT_INSET),
+        )
+        self._collapsible_settings_sections[label] = (
+            header,
+            content_sizer,
+            content_panel,
+        )
+        header.Bind(
+            wx.EVT_TOGGLEBUTTON,
+            lambda event, section_label=label: self._on_collapsible_settings_section_toggled(
+                event,
+                section_label,
+            ),
+        )
+        target_sizer = (
+            parent_sizer
+            if parent_sizer is not None
+            else self.settings_sizer
+        )
+        target_sizer.Add(
+            card,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CARD_MARGIN,
+        )
+        self._update_collapsible_settings_section(label)
+        return card, content_sizer
+
+    def _build_labeled_choice(self, parent, sizer, label, choices, tooltip, icon_provider=None, show_icons=False):
+        label_control = _make_text(parent, label, point_size=9, bold=True)
+        self._set_control_tooltip(label_control, tooltip)
+        sizer.Add(
+            label_control,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CONTROL_GAP,
+        )
+        choice = ModernChoice(
+            parent,
+            choices,
+            icon_provider=icon_provider,
+            show_icons=show_icons,
+        )
+        self._set_control_tooltip(choice, tooltip)
+        sizer.Add(
+            choice,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CARD_PADDING,
+        )
+        return label_control, choice
+
+    def _build_slider_row(self, parent, value, minimum, maximum, box_width=58):
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        slider = ModernSlider(parent, value=value, minValue=minimum, maxValue=maximum)
+        text_box = ModernTextField(parent, value=str(value), width=box_width)
+        row.Add(slider, 1, wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, _dip(parent, 8))
+        row.Add(text_box, 0, wx.ALIGN_CENTER_VERTICAL)
+        return row, slider, text_box
+
+    def _add_checkbox(self, parent, sizer, attribute, label, value, tooltip):
+        control = ModernCheckBox(parent, label, value)
+        setattr(self, attribute, control)
+        self._set_control_tooltip(control, tooltip)
+
+        _tighten_gap_before_checkbox(sizer)
+        sizer.Add(
+            control,
+            0,
+            wx.LEFT | wx.RIGHT | wx.EXPAND,
+            UI_CONTROL_GAP,
+        )
+        sizer.AddSpacer(UI_CHECKBOX_CONTROL_GAP)
+        return control
+
+    def _sync_main_content_width(self):
+        root = getattr(self, "_main_content_root", None)
+        panel = getattr(self, "_main_content_panel", None)
+        item = getattr(self, "_main_content_sizer_item", None)
+        if root is None or panel is None or item is None:
+            return
+
+        try:
+            available_width = int(root.GetClientSize().width)
+        except Exception:
+            return
+        if available_width <= 0:
+            return
+
+        target_width = min(
+            available_width,
+            _dip(root, UI_MAIN_CONTENT_MAX_WIDTH),
+        )
+        if target_width == getattr(self, "_main_content_width", None):
+            return
+
+        self._main_content_width = target_width
+        try:
+            panel.SetMinSize((target_width, -1))
+        except Exception:
+            pass
+        try:
+            item.SetMinSize((target_width, -1))
+        except Exception:
+            pass
+        try:
+            panel.InvalidateBestSize()
+        except Exception:
+            pass
+        try:
+            root.Layout()
+        except Exception:
+            pass
+
+    def _on_main_content_root_size(self, event):
+        self._sync_main_content_width()
+        event.Skip()
+
+    def _build_floating_ui(self):
+        owner = wx.GetTopLevelParent(self) or self
+        self._plugin_window = BlocksToStorageWindow(owner, self)
+        root = wx.Panel(
+            self._plugin_window,
+            style=wx.BORDER_NONE | wx.FULL_REPAINT_ON_RESIZE | wx.CLIP_CHILDREN,
+        )
+        _mark_custom_ui_owned(root, f"{CUSTOM_UI_NAME_PREFIX}:BlocksToStorageRoot")
+        root.SetBackgroundColour(BLOCKS_TO_STORAGE_THEME["passive_window"])
+        root_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        root.SetSizer(root_sizer)
+
+        self._main_content_root = root
+        self._main_content_panel = wx.Panel(
+            root,
+            style=wx.BORDER_NONE | wx.FULL_REPAINT_ON_RESIZE | wx.CLIP_CHILDREN,
+        )
+        _mark_custom_ui_owned(
+            self._main_content_panel,
+            f"{CUSTOM_UI_NAME_PREFIX}:BlocksToStorageMainContent",
+        )
+        self._main_content_panel.SetBackgroundColour(
+            BLOCKS_TO_STORAGE_THEME["passive_window"]
+        )
+        main_content_sizer = wx.BoxSizer(wx.VERTICAL)
+        self._main_content_panel.SetSizer(main_content_sizer)
+
+        root_sizer.AddStretchSpacer(1)
+        self._main_content_sizer_item = root_sizer.Add(
+            self._main_content_panel,
+            0,
+            wx.EXPAND,
+        )
+        root_sizer.AddStretchSpacer(1)
+
+        initial_content_width = _dip(
+            root,
+            min(FLOATING_DEFAULT_SIZE[0], UI_MAIN_CONTENT_MAX_WIDTH),
+        )
+        self._main_content_width = initial_content_width
+        self._main_content_panel.SetMinSize((initial_content_width, -1))
+        self._main_content_sizer_item.SetMinSize((initial_content_width, -1))
+        root.Bind(wx.EVT_SIZE, self._on_main_content_root_size)
+
+        header = wx.Panel(
+            self._main_content_panel,
+            style=wx.BORDER_NONE | wx.CLIP_CHILDREN,
+        )
+        _mark_custom_ui_owned(header)
+        header.SetBackgroundColour(BLOCKS_TO_STORAGE_THEME["passive_window"])
+        header_sizer = wx.BoxSizer(wx.VERTICAL)
+        header.SetSizer(header_sizer)
+        title = _make_text(header, "BLOCKS TO STORAGE", point_size=18, bold=True)
+        subtitle = _make_wrapped_text(
+            header,
+            "Organized storage, grouping, labeling, packing, and reporting",
+            point_size=9,
+            muted=True,
+        )
+        header_sizer.Add(title, 0, wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND, 16)
+        header_sizer.Add(
+            subtitle,
+            0,
+            wx.LEFT | wx.RIGHT | wx.TOP | wx.BOTTOM | wx.EXPAND,
+            16,
+        )
+        main_content_sizer.Add(header, 0, wx.EXPAND)
+
+        settings_host = wx.Panel(
+            self._main_content_panel,
+            style=wx.BORDER_NONE | wx.CLIP_CHILDREN,
+        )
+        _mark_custom_ui_owned(settings_host)
+        settings_host.SetBackgroundColour(BLOCKS_TO_STORAGE_THEME["passive_window"])
+        settings_row = wx.BoxSizer(wx.HORIZONTAL)
+        settings_host.SetSizer(settings_row)
+        self.scroll = ModernScrollViewport(
+            settings_host,
+            background=BLOCKS_TO_STORAGE_THEME["passive_window"],
+        )
+        _mark_custom_ui_owned(
+            self.scroll,
+            f"{CUSTOM_UI_NAME_PREFIX}:BlocksToStorageSettings",
+        )
+        self.scroll.SetMinSize((-1, self.SETTINGS_VIEWPORT_HEIGHT))
+        self.settings_content_panel = self.scroll.GetContentWindow()
+        self.settings_panel = self.settings_content_panel
         self.settings_sizer = wx.BoxSizer(wx.VERTICAL)
+        self.scroll.SetContentSizer(self.settings_sizer)
         self._collapsible_settings_sections = {}
-        self.settings_panel.SetSizer(self.settings_sizer)
-        self.Bind(wx.EVT_SIZE, self._on_panel_resized)
+        self.settings_sizer.AddSpacer(_dip(self.scroll, 4))
 
-        title = wx.StaticText(self.settings_panel, label="Blocks to Storage")
-        self.settings_sizer.Add(title, 0, wx.ALL, 6)
-
-        self._add_settings_section("Storage settings")
-
-        container_row = wx.BoxSizer(wx.HORIZONTAL)
-        container_label = wx.StaticText(self.settings_panel, label="Storage container")
-        self.storage_choice = wx.Choice(
-            self.settings_panel,
-            choices=[
-                self.CONTAINER_CHEST,
-                self.CONTAINER_BARREL,
-                self.CONTAINER_SHULKER,
-            ],
+        storage_card, storage_sizer = self._create_card(
+            self.settings_content_panel,
+            "Storage Settings",
+            "Choose the outer storage type, capacity and vertical arrangement.",
         )
-        self.storage_choice.SetSelection(0)
-        self.storage_choice.Bind(wx.EVT_CHOICE, self._on_storage_choice_changed)
-
-        container_row.Add(container_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-        container_row.Add(self.storage_choice, 1)
-        self.settings_sizer.Add(container_row, 0, wx.ALL | wx.EXPAND, 6)
-
-        self.shulker_color_row = wx.BoxSizer(wx.HORIZONTAL)
-        shulker_color_label = wx.StaticText(self.settings_panel, label="Shulker color")
-        self.shulker_color_choice = wx.Choice(self.settings_panel, choices=self.SHULKER_COLORS)
-        self.shulker_color_choice.SetSelection(0)
-
-        self.shulker_color_row.Add(shulker_color_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-        self.shulker_color_row.Add(self.shulker_color_choice, 1)
-        self.settings_sizer.Add(self.shulker_color_row, 0, wx.ALL | wx.EXPAND, 6)
-
-        self.use_double_chests = wx.CheckBox(self.settings_panel, label="Use double chests")
-        self.use_double_chests.SetValue(False)
-        self.settings_sizer.Add(self.use_double_chests, 0, wx.ALL, 6)
-
-        stack_row = wx.BoxSizer(wx.HORIZONTAL)
-        stack_label = wx.StaticText(self.settings_panel, label="Vertical stack height")
-        self.stack_height = wx.SpinCtrl(
-            self.settings_panel,
-            min=1,
-            max=self.MAX_STACK_HEIGHT,
-            initial=self.DEFAULT_STACK_HEIGHT,
-            size=(80, -1),
+        container_tip = (
+            "Choose which storage block will hold the collected blocks. Chests "
+            "support the double chest option. Barrels and shulker boxes use normal 27-slot storage."
         )
-        stack_row.Add(stack_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-        stack_row.Add(self.stack_height, 0)
-        self.settings_sizer.Add(stack_row, 0, wx.ALL, 6)
-
-        self._add_settings_section("Export behavior")
-
-        self.include_unusual = wx.CheckBox(
-            self.settings_panel,
-            label="Include unusual blocks",
+        self.storage_container_label, self.storage_choice = self._build_labeled_choice(
+            storage_card,
+            storage_sizer,
+            "Storage container",
+            (self.CONTAINER_CHEST, self.CONTAINER_BARREL, self.CONTAINER_SHULKER),
+            container_tip,
+            icon_provider=self._storage_icon_cache,
+            show_icons=True,
         )
-        self.include_unusual.SetValue(False)
-
-        self.preserve_bedrock = wx.CheckBox(
-            self.settings_panel,
-            label="Preserve bedrock",
+        self.show_storage_icons_cb = ModernCheckBox(
+            storage_card,
+            "Show visual storage selectors",
+            True,
         )
-        self.preserve_bedrock.SetValue(True)
-
-        self.alphabetical_order = wx.CheckBox(self.settings_panel, label="ABC item order")
-        self.alphabetical_order.SetValue(True)
-        self.settings_sizer.Add(self.alphabetical_order, 0, wx.ALL, 6)
-
-        self._add_settings_section("Separated groups")
-
-        self.separate_types = wx.CheckBox(
-            self.settings_panel,
-            label="One block type per storage group",
+        self._set_control_tooltip(
+            self.show_storage_icons_cb,
+            "Shows locally available storage artwork and shulker color swatches. "
+            "Text-only selection remains available when disabled or when artwork is unavailable.",
         )
-        self.separate_types.SetValue(False)
-        self.separate_types.Bind(wx.EVT_CHECKBOX, self._on_separate_types_changed)
-        self.settings_sizer.Add(self.separate_types, 0, wx.ALL, 6)
-
-        self.add_group_item_frames = wx.CheckBox(
-            self.settings_panel,
-            label="Add item frames for separated groups",
+        _tighten_gap_before_checkbox(storage_sizer)
+        storage_sizer.Add(
+            self.show_storage_icons_cb,
+            0,
+            wx.LEFT | wx.RIGHT | wx.EXPAND,
+            UI_CONTROL_GAP,
         )
-        self.add_group_item_frames.SetValue(False)
-        self.settings_sizer.Add(self.add_group_item_frames, 0, wx.ALL, 6)
-
-        group_spacing_row = wx.BoxSizer(wx.HORIZONTAL)
-        self.group_spacing_label = wx.StaticText(self.settings_panel, label="Spacing between separated groups")
-        self.group_spacing = wx.SpinCtrl(
-            self.settings_panel,
-            min=0,
-            max=self.MAX_GROUP_SPACING,
-            initial=self.DEFAULT_GROUP_SPACING,
-            size=(80, -1),
+        storage_sizer.AddSpacer(UI_CHECKBOX_CONTROL_GAP)
+        _add_checkbox_group_bottom_spacing(storage_sizer)
+        self.shulker_color_row = wx.BoxSizer(wx.VERTICAL)
+        self.shulker_color_label = _make_text(
+            storage_card,
+            "Shulker color",
+            point_size=9,
+            bold=True,
         )
-        group_spacing_row.Add(self.group_spacing_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-        group_spacing_row.Add(self.group_spacing, 0)
-        self.settings_sizer.Add(group_spacing_row, 0, wx.ALL, 6)
-
-        self._add_settings_section("Nested shulker storage")
-
-        self.use_nested_shulker_storage = wx.CheckBox(self.settings_panel, label="Pack into shulker boxes inside storage")
-        self.use_nested_shulker_storage.SetValue(False)
-        self.use_nested_shulker_storage.Bind(wx.EVT_CHECKBOX, self._on_nested_shulker_storage_changed)
-        self.settings_sizer.Add(self.use_nested_shulker_storage, 0, wx.ALL, 6)
-
-        self.nested_shulker_mode_row = wx.BoxSizer(wx.HORIZONTAL)
-        self.nested_shulker_mode_label = wx.StaticText(self.settings_panel, label="Nested shulker mode")
-        self.nested_shulker_mode_choice = wx.Choice(
-            self.settings_panel,
-            choices=[
-                self.NESTED_SHULKER_MODE_PRACTICAL,
-                self.NESTED_SHULKER_MODE_COMPACT,
-            ],
+        self.shulker_color_choice = ModernChoice(
+            storage_card,
+            self.SHULKER_COLORS,
+            icon_provider=self._storage_icon_cache,
+            show_icons=True,
+            icon_columns=SHULKER_SELECTOR_ICON_COLUMNS,
+            icon_visible_rows=SHULKER_SELECTOR_VISIBLE_ROWS,
         )
-        self.nested_shulker_mode_choice.SetSelection(0)
-        self.nested_shulker_mode_row.Add(self.nested_shulker_mode_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-        self.nested_shulker_mode_row.Add(self.nested_shulker_mode_choice, 1)
-        self.settings_sizer.Add(self.nested_shulker_mode_row, 0, wx.ALL | wx.EXPAND, 6)
+        shulker_tip = "Choose the shulker box color. Default creates the normal undyed shulker box."
+        self._set_control_tooltip(self.shulker_color_label, shulker_tip)
+        self._set_control_tooltip(self.shulker_color_choice, shulker_tip)
+        self.shulker_color_row.Add(
+            self.shulker_color_label,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CONTROL_GAP,
+        )
+        self.shulker_color_row.Add(
+            self.shulker_color_choice,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CARD_PADDING,
+        )
+        self.shulker_color_row_item = storage_sizer.Add(
+            self.shulker_color_row,
+            0,
+            wx.EXPAND,
+        )
+        self._add_checkbox(
+            storage_card,
+            storage_sizer,
+            "use_double_chests",
+            "Use double chests",
+            False,
+            "Only applies when Storage container is set to Chest. Uses connected double chests with 54 slots instead of single chests with 27 slots.",
+        )
+        self._double_chest_group_bottom_spacing = (
+            _add_checkbox_group_bottom_spacing(storage_sizer)
+        )
+        self.stack_height_label = _make_text(
+            storage_card,
+            "Vertical stack height",
+            point_size=9,
+            bold=True,
+        )
+        stack_tip = "Controls how many storage blocks can stack vertically before the plugin starts a new line. Default is 8. Maximum is 40."
+        self._set_control_tooltip(self.stack_height_label, stack_tip)
+        storage_sizer.Add(
+            self.stack_height_label,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CONTROL_GAP,
+        )
+        self.stack_height_row, self.stack_height, self.stack_height_box = self._build_slider_row(
+            storage_card,
+            self.DEFAULT_STACK_HEIGHT,
+            1,
+            self.MAX_STACK_HEIGHT,
+        )
+        self._set_control_tooltip(self.stack_height, stack_tip)
+        self._set_control_tooltip(self.stack_height_box, stack_tip)
+        storage_sizer.Add(
+            self.stack_height_row,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CARD_PADDING,
+        )
+        self.settings_sizer.Add(
+            storage_card,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CARD_MARGIN,
+        )
 
-        self.nested_shulker_color_row = wx.BoxSizer(wx.HORIZONTAL)
-        self.nested_shulker_color_label = wx.StaticText(self.settings_panel, label="Nested shulker color")
-        self.nested_shulker_color_choice = wx.Choice(self.settings_panel, choices=self.SHULKER_COLORS)
-        self.nested_shulker_color_choice.SetSelection(0)
-        self.nested_shulker_color_row.Add(self.nested_shulker_color_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-        self.nested_shulker_color_row.Add(self.nested_shulker_color_choice, 1)
-        self.settings_sizer.Add(self.nested_shulker_color_row, 0, wx.ALL | wx.EXPAND, 6)
+        export_card, export_sizer = self._create_card(
+            self.settings_content_panel,
+            "Export Behavior",
+            "Control the order used when block groups are packed into storage.",
+        )
+        self._add_checkbox(
+            export_card,
+            export_sizer,
+            "alphabetical_order",
+            "ABC item order",
+            True,
+            "Sorts block types by their Minecraft Bedrock Edition display names before packing them into storage. Turning this off keeps first-seen scan order.",
+        )
+        _add_checkbox_group_bottom_spacing(export_sizer)
+        self.settings_sizer.Add(
+            export_card,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CARD_MARGIN,
+        )
 
-        performance_sizer = self._add_collapsible_settings_section(
+        groups_card, groups_sizer = self._create_card(
+            self.settings_content_panel,
+            "Separated Groups",
+            "Keep block types in independent storage groups with optional labels and spacing.",
+        )
+        self._add_checkbox(
+            groups_card,
+            groups_sizer,
+            "separate_types",
+            "One block type per storage group",
+            False,
+            "Keeps each block type in its own storage group. Example: stone goes into its own containers, dirt goes into its own containers, and so on.",
+        )
+        self._add_checkbox(
+            groups_card,
+            groups_sizer,
+            "add_group_item_frames",
+            "Add item frames for separated groups",
+            False,
+            "Only works when One block type per storage group is enabled. Adds one regular item frame or glow item frame to the first storage container for each block type group.",
+        )
+        _add_checkbox_group_bottom_spacing(groups_sizer)
+        self.group_spacing_label = _make_text(
+            groups_card,
+            "Spacing between separated groups",
+            point_size=9,
+            bold=True,
+        )
+        group_tip = "Controls the empty side space between separated block groups. Range is 0 to 8. Default is 1. Item frames reserve front space separately."
+        self._set_control_tooltip(self.group_spacing_label, group_tip)
+        groups_sizer.Add(
+            self.group_spacing_label,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CONTROL_GAP,
+        )
+        self.group_spacing_row, self.group_spacing, self.group_spacing_box = self._build_slider_row(
+            groups_card,
+            self.DEFAULT_GROUP_SPACING,
+            0,
+            self.MAX_GROUP_SPACING,
+        )
+        self._set_control_tooltip(self.group_spacing, group_tip)
+        self._set_control_tooltip(self.group_spacing_box, group_tip)
+        self.group_spacing_row_item = groups_sizer.Add(
+            self.group_spacing_row,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CARD_PADDING,
+        )
+        self.settings_sizer.Add(
+            groups_card,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CARD_MARGIN,
+        )
+
+        nested_card, nested_sizer = self._create_card(
+            self.settings_content_panel,
+            "Nested Shulker Storage",
+            "Pack collected items into shulker-box items before placing them in outer storage.",
+        )
+        self._add_checkbox(
+            nested_card,
+            nested_sizer,
+            "use_nested_shulker_storage",
+            "Pack into shulker boxes inside storage",
+            False,
+            "Advanced. Puts collected blocks into shulker boxes, then puts those shulker boxes inside the generated storage containers.",
+        )
+        self._nested_shulker_group_bottom_spacing = (
+            _add_checkbox_group_bottom_spacing(nested_sizer)
+        )
+        self.nested_shulker_mode_row = wx.BoxSizer(wx.VERTICAL)
+        self.nested_shulker_mode_label = _make_text(
+            nested_card,
+            "Nested shulker mode",
+            point_size=9,
+            bold=True,
+        )
+        nested_mode_tip = "Balanced mode leaves small groups directly in storage and uses shulker boxes for large groups. Compact mode uses shulker boxes for almost every group."
+        self.nested_shulker_mode_choice = ModernChoice(
+            nested_card,
+            (self.NESTED_SHULKER_MODE_PRACTICAL, self.NESTED_SHULKER_MODE_COMPACT),
+        )
+        self._set_control_tooltip(self.nested_shulker_mode_label, nested_mode_tip)
+        self._set_control_tooltip(self.nested_shulker_mode_choice, nested_mode_tip)
+        self.nested_shulker_mode_row.Add(
+            self.nested_shulker_mode_label,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CONTROL_GAP,
+        )
+        self.nested_shulker_mode_row.Add(
+            self.nested_shulker_mode_choice,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CARD_PADDING,
+        )
+        self.nested_shulker_mode_row_item = nested_sizer.Add(
+            self.nested_shulker_mode_row,
+            0,
+            wx.EXPAND,
+        )
+        self.nested_shulker_color_row = wx.BoxSizer(wx.VERTICAL)
+        self.nested_shulker_color_label = _make_text(
+            nested_card,
+            "Nested shulker color",
+            point_size=9,
+            bold=True,
+        )
+        nested_color_tip = "Choose the color of the generated shulker boxes used inside storage containers. Default creates normal undyed shulker boxes."
+        self.nested_shulker_color_choice = ModernChoice(
+            nested_card,
+            self.SHULKER_COLORS,
+            icon_provider=self._storage_icon_cache,
+            show_icons=True,
+            icon_columns=SHULKER_SELECTOR_ICON_COLUMNS,
+            icon_visible_rows=SHULKER_SELECTOR_VISIBLE_ROWS,
+        )
+        self._set_control_tooltip(self.nested_shulker_color_label, nested_color_tip)
+        self._set_control_tooltip(self.nested_shulker_color_choice, nested_color_tip)
+        self.nested_shulker_color_row.Add(
+            self.nested_shulker_color_label,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CONTROL_GAP,
+        )
+        self.nested_shulker_color_row.Add(
+            self.nested_shulker_color_choice,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CARD_PADDING,
+        )
+        self.nested_shulker_color_row_item = nested_sizer.Add(
+            self.nested_shulker_color_row,
+            0,
+            wx.EXPAND,
+        )
+        self.settings_sizer.Add(
+            nested_card,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CARD_MARGIN,
+        )
+
+        _performance_card, performance_sizer = self._create_collapsible_card(
+            self.settings_content_panel,
             "Performance",
+            "Fast chunk paths remain enabled by default and safely fall back when needed.",
             expanded=True,
         )
-
-        self.fast_direct_scan = wx.CheckBox(
-            self.settings_panel,
-            label="Fast direct chunk scan",
+        self._add_checkbox(
+            self._collapsible_settings_sections["Performance"][2],
+            performance_sizer,
+            "fast_direct_scan",
+            "Fast direct chunk scan",
+            True,
+            "Scans directly from chunk data instead of calling get_version_block for every selected block. This is much faster on large selections.",
         )
-        self.fast_direct_scan.SetValue(True)
-        performance_sizer.Add(self.fast_direct_scan, 0, wx.ALL, 6)
-
-        self.fast_direct_clear = wx.CheckBox(
-            self.settings_panel,
-            label="Fast direct chunk clear",
+        self._add_checkbox(
+            self._collapsible_settings_sections["Performance"][2],
+            performance_sizer,
+            "fast_direct_clear",
+            "Fast direct chunk clear",
+            True,
+            "Clears directly in chunk data using one cached air block ID per chunk. If it fails, the plugin falls back to the safer clear method.",
         )
-        self.fast_direct_clear.SetValue(True)
-        performance_sizer.Add(self.fast_direct_clear, 0, wx.ALL, 6)
+        _add_checkbox_group_bottom_spacing(performance_sizer)
 
-        safety_sizer = self._add_collapsible_settings_section(
+        _safety_card, safety_sizer = self._create_collapsible_card(
+            self.settings_content_panel,
             "Safety",
+            "Keep survival-friendly defaults and protect large or bedrock-heavy selections.",
             expanded=True,
         )
-        safety_sizer.Add(self.include_unusual, 0, wx.ALL, 6)
-        safety_sizer.Add(self.preserve_bedrock, 0, wx.ALL, 6)
-
-        self.show_large_selection_warning = wx.CheckBox(
-            self.settings_panel,
-            label="Show large selection warning",
+        safety_parent = self._collapsible_settings_sections["Safety"][2]
+        self._add_checkbox(
+            safety_parent,
+            safety_sizer,
+            "include_unusual",
+            "Include unusual blocks",
+            False,
+            "Includes technical or normally unobtainable block forms when they have a supported item representation. Leave disabled for normal survival-friendly exports.",
         )
-        self.show_large_selection_warning.SetValue(True)
-        safety_sizer.Add(self.show_large_selection_warning, 0, wx.ALL, 6)
-
-        self._add_settings_section("Display-name data")
-
-        self.use_found_entries_cache = wx.CheckBox(
-            self.settings_panel,
-            label=f"Use plugin-created {self.FOUND_ENTRIES_FILENAME} cache",
+        self._add_checkbox(
+            safety_parent,
+            safety_sizer,
+            "preserve_bedrock",
+            "Preserve bedrock",
+            True,
+            "Keeps bedrock blocks in the selected area instead of replacing them with air.",
         )
-        self.use_found_entries_cache.SetValue(True)
+        self._add_checkbox(
+            safety_parent,
+            safety_sizer,
+            "show_large_selection_warning",
+            "Show large selection warning",
+            True,
+            "Shows a confirmation before running on selections estimated at 500,000 blocks or more.",
+        )
+        _add_checkbox_group_bottom_spacing(safety_sizer)
+
+        display_card, display_sizer = self._create_card(
+            self.settings_content_panel,
+            "Display-Name Data",
+            "Use local plugin and Minecraft language data for unresolved names and ABC ordering.",
+        )
+        self._add_checkbox(
+            display_card,
+            display_sizer,
+            "use_found_entries_cache",
+            f"Use plugin-created {self.FOUND_ENTRIES_FILENAME} cache",
+            True,
+            f"Uses previously saved entries from {self.FOUND_ENTRIES_FILENAME} independently of the installed language fallback.",
+        )
+        self._add_checkbox(
+            display_card,
+            display_sizer,
+            "use_installed_language_data",
+            "Use installed Minecraft en_US.lang as fallback",
+            False,
+            "Allows unresolved ABC display names and conservative scan-identity recovery to use a local Minecraft Bedrock Edition en_US.lang file during an operation.",
+        )
+        self._add_checkbox(
+            display_card,
+            display_sizer,
+            "auto_detect_language_file",
+            "Automatically detect the Minecraft language file",
+            False,
+            "Checks only known Minecraft for Windows installation locations on available drive letters. It does not recursively search drives.",
+        )
+
+        self._language_source_group_bottom_spacing = (
+            _add_checkbox_group_bottom_spacing(display_sizer)
+        )
+        self.language_file_row = wx.BoxSizer(wx.VERTICAL)
+        self.language_file_label = _make_text(
+            display_card,
+            "Language file",
+            point_size=9,
+            bold=True,
+        )
+        language_tip = "Path to the Minecraft Bedrock Edition en_US.lang file used for unresolved display names."
+        self._set_control_tooltip(self.language_file_label, language_tip)
+        self.language_file_row.Add(
+            self.language_file_label,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CONTROL_GAP,
+        )
+        path_row = wx.BoxSizer(wx.HORIZONTAL)
+        self.language_file_path = ModernTextField(
+            display_card,
+            value=str(Path("C:/") / self.DEFAULT_MINECRAFT_LANGUAGE_RELATIVE_PATH),
+            width=260,
+            center=False,
+            large=False,
+        )
+        self.browse_language_file_button = ModernButton(
+            display_card,
+            "Browse...",
+            compact=True,
+        )
+        self._set_control_tooltip(self.language_file_path, language_tip)
+        self._set_control_tooltip(
+            self.browse_language_file_button,
+            "Select the Minecraft Bedrock Edition en_US.lang file manually.",
+        )
+        path_row.Add(self.language_file_path, 1, wx.RIGHT | wx.EXPAND, _dip(display_card, 8))
+        path_row.Add(self.browse_language_file_button, 0, wx.EXPAND)
+        self.language_file_row.Add(
+            path_row,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CARD_PADDING,
+        )
+        self.language_file_row_item = display_sizer.Add(
+            self.language_file_row,
+            0,
+            wx.EXPAND,
+        )
+        self._add_checkbox(
+            display_card,
+            display_sizer,
+            "save_found_language_entries",
+            f"Keep {self.FOUND_ENTRIES_FILENAME} updated from en_US.lang",
+            False,
+            f"Scans the configured language file before each operation and atomically adds safe missing display-name entries to {self.FOUND_ENTRIES_FILENAME}.",
+        )
+        self._add_checkbox(
+            display_card,
+            display_sizer,
+            "simulate_missing_display_name",
+            "Simulate missing embedded display-name entry",
+            False,
+            "Diagnostic simulation. Makes one item behave as though its embedded display-name entry is missing.",
+        )
+        _add_checkbox_group_bottom_spacing(display_sizer)
+        self.simulated_missing_alias_row = wx.BoxSizer(wx.VERTICAL)
+        self.simulated_missing_alias_label = _make_text(
+            display_card,
+            "Entry alias to ignore",
+            point_size=9,
+            bold=True,
+        )
+        alias_tip = (
+            "Internal item alias omitted by the diagnostic simulation, for example "
+            "oak_log. Only one alias is supported."
+        )
+        self.simulated_missing_alias = ModernTextField(
+            display_card,
+            value="oak_log",
+            width=180,
+            center=False,
+            large=False,
+        )
+        self._set_control_tooltip(self.simulated_missing_alias_label, alias_tip)
+        self._set_control_tooltip(self.simulated_missing_alias, alias_tip)
+        self.simulated_missing_alias_row.Add(
+            self.simulated_missing_alias_label,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CONTROL_GAP,
+        )
+        self.simulated_missing_alias_row.Add(
+            self.simulated_missing_alias,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CARD_PADDING,
+        )
+        self.simulated_missing_alias_row_item = display_sizer.Add(
+            self.simulated_missing_alias_row,
+            0,
+            wx.EXPAND,
+        )
+        self.settings_sizer.Add(
+            display_card,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CARD_MARGIN,
+        )
+
+        conversion_card, conversion_sizer = self._create_card(
+            self.settings_content_panel,
+            "Conversion Data",
+            "Optional reviewed local rules run after built-in state-aware conversion logic.",
+        )
+        self._add_checkbox(
+            conversion_card,
+            conversion_sizer,
+            "use_conversion_entries",
+            f"Use plugin-created {self.CONVERSION_ENTRIES_FILENAME} rules",
+            True,
+            f"Reads reviewed local block-to-item rules from {self.CONVERSION_ENTRIES_FILENAME}. Built-in verified conversions keep priority.",
+        )
+        _add_checkbox_group_bottom_spacing(conversion_sizer)
+        self.settings_sizer.Add(
+            conversion_card,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CARD_MARGIN,
+        )
+
+        _diagnostics_card, diagnostics_sizer = self._create_collapsible_card(
+            self.settings_content_panel,
+            "Diagnostics",
+            "Optional local report detail and controlled conversion simulations.",
+            expanded=False,
+        )
+        diagnostics_parent = self._collapsible_settings_sections["Diagnostics"][2]
+        self._add_checkbox(
+            diagnostics_parent,
+            diagnostics_sizer,
+            "include_item_frame_audit",
+            "Include item frame label audit in report",
+            False,
+            "Adds detailed item-frame label diagnostics to the export report. Leave disabled during normal use.",
+        )
+        self._add_checkbox(
+            diagnostics_parent,
+            diagnostics_sizer,
+            "include_display_name_audit",
+            "Include display-name ABC audit in report",
+            False,
+            "Adds display-name and ABC sorting diagnostics without changing conversion or placement.",
+        )
+        self._add_checkbox(
+            diagnostics_parent,
+            diagnostics_sizer,
+            "use_reviewed_amulet_normalization",
+            "Use plugin-reviewed conversion fallback",
+            True,
+            "Lets the plugin use only built-in conversion fallbacks individually "
+            "reviewed against Amulet conversion behavior.",
+        )
+        self._add_checkbox(
+            diagnostics_parent,
+            diagnostics_sizer,
+            "record_conversion_candidates",
+            f"Record inactive candidates to {self.CONVERSION_CANDIDATES_FILENAME}",
+            False,
+            "Records inactive conversion observations in a local candidate file. Candidates never change exports or active conversion rules.",
+        )
+        self._add_checkbox(
+            diagnostics_parent,
+            diagnostics_sizer,
+            "attempt_unresolved_item_writes",
+            "Attempt unresolved item writes",
+            False,
+            "Diagnostic simulation. Allows unresolved generic identifiers to be written so ghost or empty results can be located in-game.",
+        )
+        _add_checkbox_group_bottom_spacing(diagnostics_sizer)
+        _advanced_card, advanced_sizer = self._create_collapsible_card(
+            diagnostics_parent,
+            "Advanced Diagnostics",
+            "Bounded read-only Amulet capability and comparison reports.",
+            expanded=False,
+            parent_sizer=diagnostics_sizer,
+        )
+        advanced_parent = self._collapsible_settings_sections["Advanced Diagnostics"][2]
+        self._add_checkbox(
+            advanced_parent,
+            advanced_sizer,
+            "include_amulet_conversion_diagnostic",
+            "Include Amulet conversion capability diagnostic in report",
+            False,
+            "Adds a local read-only report section showing whether Amulet can translate known block identities into item-capable forms.",
+        )
+        self._add_checkbox(
+            advanced_parent,
+            advanced_sizer,
+            "include_amulet_translator_probe",
+            "Include Amulet translator validation probe in report",
+            False,
+            "Runs a local read-only validation probe against Amulet's block and item translators.",
+        )
+        self._add_checkbox(
+            advanced_parent,
+            advanced_sizer,
+            "include_amulet_conversion_audit",
+            "Include Amulet conversion comparison audit in report",
+            False,
+            "Reports which resolver layer chose each final item and compares generic identifiers with Amulet normalization candidates.",
+        )
+        self._add_checkbox(
+            advanced_parent,
+            advanced_sizer,
+            "record_all_conversion_observations",
+            "Record all resolved conversion observations",
+            False,
+            "Advanced diagnostic recording. Records state-aware observations even "
+            "when a verified built-in resolver already handles the source family.",
+        )
+        _add_checkbox_group_bottom_spacing(advanced_sizer)
+        files_card, files_sizer = self._create_card(
+            self.settings_content_panel,
+            "Plugin Files",
+            "Manage settings and optional Blocks to Storage data files without affecting worlds or unrelated files.",
+        )
+        self.manage_plugin_files_button = ModernButton(
+            files_card,
+            "Manage Plugin Files...",
+        )
+        self._set_control_tooltip(
+            self.manage_plugin_files_button,
+            "Create, delete, open, reset, repair, import, export, or update the files owned by Blocks to Storage.",
+        )
+        files_sizer.Add(
+            self.manage_plugin_files_button,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CARD_PADDING,
+        )
+        self.settings_sizer.Add(
+            files_card,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_CARD_MARGIN,
+        )
+        self.settings_sizer.AddSpacer(_dip(self.scroll, 4))
+
+        settings_row.Add(self.scroll, 1, wx.EXPAND)
+        self.settings_scrollbar = ModernScrollBar(settings_host, self.scroll)
+        settings_row.Add(
+            self.settings_scrollbar,
+            0,
+            wx.RIGHT | wx.TOP | wx.BOTTOM | wx.EXPAND,
+            _dip(settings_host, 6),
+        )
+        main_content_sizer.Add(
+            settings_host,
+            self.SETTINGS_GROW_PROPORTION,
+            wx.LEFT | wx.RIGHT | wx.EXPAND,
+            _dip(root, 4),
+        )
+        self.scroll.Bind(wx.EVT_SCROLLWIN, self._on_settings_scroll)
+        self.scroll.Bind(wx.EVT_MOUSEWHEEL, self._on_settings_scroll)
+
+        footer = wx.Panel(
+            self._main_content_panel,
+            style=wx.BORDER_NONE | wx.CLIP_CHILDREN,
+        )
+        _mark_custom_ui_owned(footer)
+        footer.SetBackgroundColour(BLOCKS_TO_STORAGE_THEME["passive_window"])
+        footer_sizer = wx.BoxSizer(wx.VERTICAL)
+        footer.SetSizer(footer_sizer)
+
+        status_card = RoundedPanel(
+            footer,
+            background=BLOCKS_TO_STORAGE_THEME["passive_surface_alt"],
+            border=BLOCKS_TO_STORAGE_THEME["passive_border"],
+            radius=10,
+        )
+        status_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        status_card.SetSizer(status_sizer)
+        status_caption = _make_text(status_card, "STATUS", point_size=8, bold=True, muted=True)
+        self.status = _make_text(status_card, "Ready", point_size=9)
+        self._set_control_tooltip(
+            self.status,
+            "Shows the current operation state and most recent result.",
+        )
+        status_sizer.Add(
+            status_caption,
+            0,
+            wx.ALL | wx.ALIGN_CENTER_VERTICAL,
+            _dip(status_card, 12),
+        )
+        status_sizer.Add(
+            self.status,
+            1,
+            wx.TOP | wx.RIGHT | wx.BOTTOM | wx.ALIGN_CENTER_VERTICAL,
+            _dip(status_card, 12),
+        )
+        footer_sizer.Add(
+            status_card,
+            0,
+            wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND,
+            UI_FOOTER_MARGIN,
+        )
+
+        action_row = wx.BoxSizer(wx.HORIZONTAL)
+        self.run_export_button = ModernButton(footer, "Scan & Store", primary=True)
+        self.run_export_button.ProtectFromExternalDisable(True)
+        self._set_control_tooltip(
+            self.run_export_button,
+            "Scans the selected area, counts exportable blocks and resulting items, clears the selected blocks, and places the collected items into the chosen storage type.",
+        )
+        action_row.Add(
+            self.run_export_button,
+            2,
+            wx.RIGHT | wx.EXPAND,
+            _dip(footer, 8),
+        )
+        self.save_report_button = ModernButton(footer, "Save Report")
+        self.save_report_button.ProtectFromExternalDisable(True)
+        self.save_report_button.SetAvailable(False)
+        self._set_control_tooltip(
+            self.save_report_button,
+            "Saves the latest export report as a UTF-8 text file.",
+        )
+        action_row.Add(
+            self.save_report_button,
+            1,
+            wx.RIGHT | wx.EXPAND,
+            _dip(footer, 8),
+        )
+        self.console_toggle_button = ModernButton(footer, "Hide Console", compact=True)
+        self._set_control_tooltip(
+            self.console_toggle_button,
+            "Hide or show the report console without clearing its content.",
+        )
+        self.console_toggle_button.Bind(wx.EVT_BUTTON, self._toggle_console)
+        action_row.Add(self.console_toggle_button, 1, wx.EXPAND)
+        footer_sizer.Add(
+            action_row,
+            0,
+            wx.ALL | wx.EXPAND,
+            UI_FOOTER_MARGIN,
+        )
+        main_content_sizer.Add(footer, 0, wx.EXPAND)
+
+        self.console_card = RoundedPanel(
+            self._main_content_panel,
+            background=BLOCKS_TO_STORAGE_THEME["console_bg"],
+            border=BLOCKS_TO_STORAGE_THEME["border"],
+            radius=12,
+        )
+        console_sizer = wx.BoxSizer(wx.VERTICAL)
+        self.console_card.SetSizer(console_sizer)
+        console_title = _make_text(
+            self.console_card,
+            "REPORT CONSOLE",
+            point_size=8,
+            bold=True,
+            muted=True,
+        )
+        console_sizer.Add(
+            console_title,
+            0,
+            wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND,
+            _dip(self.console_card, 12),
+        )
+        self.text = wx.TextCtrl(
+            self.console_card,
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL | wx.BORDER_NONE,
+            size=(-1, self.CONSOLE_MIN_TEXT_HEIGHT),
+        )
+        _mark_custom_ui_owned(self.text, self.CONSOLE_SEMANTIC_NAME)
+        self.text.SetForegroundColour(BLOCKS_TO_STORAGE_THEME["console_text"])
+        self.text.SetBackgroundColour(BLOCKS_TO_STORAGE_THEME["console_bg"])
+        try:
+            wx.CallAfter(_try_apply_dark_native_theme, self.text)
+        except Exception:
+            pass
+        try:
+            self.text.SetFont(
+                wx.Font(
+                    9,
+                    wx.FONTFAMILY_TELETYPE,
+                    wx.FONTSTYLE_NORMAL,
+                    wx.FONTWEIGHT_NORMAL,
+                )
+            )
+        except Exception:
+            pass
+        self.text.SetMinSize(
+            (_dip(self.console_card, 340), _dip(self.console_card, self.CONSOLE_MIN_TEXT_HEIGHT))
+        )
+        self.console_card.SetMinSize((-1, _dip(root, self.CONSOLE_MIN_CARD_HEIGHT)))
+        console_sizer.Add(
+            self.text,
+            1,
+            wx.ALL | wx.EXPAND,
+            _dip(self.console_card, 12),
+        )
+        main_content_sizer.Add(
+            self.console_card,
+            self.CONSOLE_GROW_PROPORTION,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            UI_FOOTER_MARGIN,
+        )
+
+        self._bind_integer_slider_and_text(
+            self.stack_height,
+            self.stack_height_box,
+            1,
+            self.MAX_STACK_HEIGHT,
+        )
+        self._bind_integer_slider_and_text(
+            self.group_spacing,
+            self.group_spacing_box,
+            0,
+            self.MAX_GROUP_SPACING,
+        )
+        self.storage_choice.Bind(wx.EVT_CHOICE, self._on_storage_choice_changed)
+        self.separate_types.Bind(wx.EVT_CHECKBOX, self._on_separate_types_changed)
+        self.use_nested_shulker_storage.Bind(
+            wx.EVT_CHECKBOX,
+            self._on_nested_shulker_storage_changed,
+        )
         self.use_found_entries_cache.Bind(
             wx.EVT_CHECKBOX,
             self._on_display_name_dependency_changed,
         )
-        self.settings_sizer.Add(
-            self.use_found_entries_cache,
-            0,
-            wx.ALL,
-            6,
-        )
-
-        self.use_installed_language_data = wx.CheckBox(
-            self.settings_panel,
-            label="Use installed Minecraft en_US.lang as fallback",
-        )
-        self.use_installed_language_data.SetValue(False)
         self.use_installed_language_data.Bind(
             wx.EVT_CHECKBOX,
             self._on_installed_language_data_changed,
         )
-        self.settings_sizer.Add(self.use_installed_language_data, 0, wx.ALL, 6)
-
-        self.auto_detect_language_file = wx.CheckBox(
-            self.settings_panel,
-            label="Automatically detect the Minecraft language file",
-        )
-        self.auto_detect_language_file.SetValue(False)
         self.auto_detect_language_file.Bind(
             wx.EVT_CHECKBOX,
             self._on_auto_detect_language_file_changed,
         )
-        self.settings_sizer.Add(self.auto_detect_language_file, 0, wx.ALL, 6)
-
-        self.language_file_row = wx.BoxSizer(wx.HORIZONTAL)
-        self.language_file_label = wx.StaticText(
-            self.settings_panel,
-            label="Language file",
-        )
-        self.language_file_path = wx.TextCtrl(
-            self.settings_panel,
-            value=str(
-                Path("C:/") / self.DEFAULT_MINECRAFT_LANGUAGE_RELATIVE_PATH
-            ),
-        )
-        self.browse_language_file_button = wx.Button(
-            self.settings_panel,
-            label="Browse...",
-        )
-        self.browse_language_file_button.Bind(
-            wx.EVT_BUTTON,
-            self._browse_for_language_file,
-        )
-        self.language_file_row.Add(
-            self.language_file_label,
-            0,
-            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
-            8,
-        )
-        self.language_file_row.Add(self.language_file_path, 1, wx.RIGHT, 6)
-        self.language_file_row.Add(self.browse_language_file_button, 0)
-        self.settings_sizer.Add(
-            self.language_file_row,
-            0,
-            wx.ALL | wx.EXPAND,
-            6,
-        )
-
-        self.save_found_language_entries = wx.CheckBox(
-            self.settings_panel,
-            label=f"Keep {self.FOUND_ENTRIES_FILENAME} updated from en_US.lang",
-        )
-        self.save_found_language_entries.SetValue(False)
         self.save_found_language_entries.Bind(
             wx.EVT_CHECKBOX,
             self._on_display_name_dependency_changed,
         )
-        self.settings_sizer.Add(
-            self.save_found_language_entries,
-            0,
-            wx.ALL,
-            6,
-        )
-
-        self.simulate_missing_display_name = wx.CheckBox(
-            self.settings_panel,
-            label="Simulate missing embedded display-name entry",
-        )
-        self.simulate_missing_display_name.SetValue(False)
         self.simulate_missing_display_name.Bind(
             wx.EVT_CHECKBOX,
             self._on_simulate_missing_display_name_changed,
         )
-        self.settings_sizer.Add(
-            self.simulate_missing_display_name,
-            0,
-            wx.ALL,
-            6,
+        self.show_storage_icons_cb.Bind(
+            wx.EVT_CHECKBOX,
+            self._on_storage_icon_visibility_changed,
         )
-
-        self.simulated_missing_alias_row = wx.BoxSizer(wx.HORIZONTAL)
-        self.simulated_missing_alias_label = wx.StaticText(
-            self.settings_panel,
-            label="Entry alias to ignore",
-        )
-        self.simulated_missing_alias = wx.TextCtrl(
-            self.settings_panel,
-            value="oak_log",
-        )
-        self.simulated_missing_alias_row.Add(
-            self.simulated_missing_alias_label,
-            0,
-            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
-            8,
-        )
-        self.simulated_missing_alias_row.Add(self.simulated_missing_alias, 1)
-        self.settings_sizer.Add(
-            self.simulated_missing_alias_row,
-            0,
-            wx.ALL | wx.EXPAND,
-            6,
-        )
-
-        self.manage_plugin_files_button = wx.Button(
-            self.settings_panel,
-            label="Manage plugin files...",
-        )
-        self.manage_plugin_files_button.Bind(
-            wx.EVT_BUTTON,
-            self._manage_plugin_files,
-        )
-        self.settings_sizer.Add(
-            self.manage_plugin_files_button,
-            0,
-            wx.ALL | wx.EXPAND,
-            6,
-        )
-
-        self._add_settings_section("Conversion data")
-
-        self.use_conversion_entries = wx.CheckBox(
-            self.settings_panel,
-            label=f"Use plugin-created {self.CONVERSION_ENTRIES_FILENAME} rules",
-        )
-        self.use_conversion_entries.SetValue(True)
-        self.settings_sizer.Add(
-            self.use_conversion_entries,
-            0,
-            wx.ALL,
-            6,
-        )
-
-        diagnostics_sizer = self._add_collapsible_settings_section(
-            "Debug and Diagnostics",
-            expanded=False,
-        )
-
-        self.include_item_frame_audit = wx.CheckBox(
-            self.settings_panel,
-            label="Include item frame label audit in report",
-        )
-        self.include_item_frame_audit.SetValue(False)
-        diagnostics_sizer.Add(self.include_item_frame_audit, 0, wx.ALL, 6)
-
-        self.include_display_name_audit = wx.CheckBox(
-            self.settings_panel,
-            label="Include display-name ABC audit in report",
-        )
-        self.include_display_name_audit.SetValue(False)
-        diagnostics_sizer.Add(self.include_display_name_audit, 0, wx.ALL, 6)
-
-        advanced_diagnostics_sizer = self._add_collapsible_settings_section(
-            "Advanced Diagnostics",
-            expanded=False,
-            parent_sizer=diagnostics_sizer,
-        )
-
-        self.include_amulet_conversion_diagnostic = wx.CheckBox(
-            self.settings_panel,
-            label="Include Amulet conversion capability diagnostic in report",
-        )
-        self.include_amulet_conversion_diagnostic.SetValue(False)
-        advanced_diagnostics_sizer.Add(
-            self.include_amulet_conversion_diagnostic,
-            0,
-            wx.ALL,
-            6,
-        )
-        self._set_tooltip(
-            self.include_amulet_conversion_diagnostic,
-            "Adds a local, read-only report section showing whether Amulet can "
-            "translate known block identities into item-capable forms. This is "
-            "diagnostic only and does not change exported items, conversion "
-            "authority, storage contents or item frames.",
-        )
-
-        self.include_amulet_translator_probe = wx.CheckBox(
-            self.settings_panel,
-            label="Include Amulet translator validation probe in report",
-        )
-        self.include_amulet_translator_probe.SetValue(False)
-        advanced_diagnostics_sizer.Add(
-            self.include_amulet_translator_probe,
-            0,
-            wx.ALL,
-            6,
-        )
-
-        self._set_tooltip(
-            self.include_amulet_translator_probe,
-            "Runs a local, read-only validation probe against Amulet's block and "
-            "item translators. The probe does not change conversion results, does "
-            "not include local paths, and does not send data online.",
-        )
-
-        self.use_reviewed_amulet_normalization = wx.CheckBox(
-            self.settings_panel,
-            label="Use plugin-reviewed conversion fallback",
-        )
-        self.use_reviewed_amulet_normalization.SetValue(True)
-        diagnostics_sizer.Add(
-            self.use_reviewed_amulet_normalization,
-            0,
-            wx.ALL,
-            6,
-        )
-        self._set_tooltip(
-            self.use_reviewed_amulet_normalization,
-            "Lets the plugin use only built-in conversion fallbacks that have "
-            "been individually reviewed and tested against Amulet. The plugin "
-            "keeps final authority, built-in state-aware conversions keep "
-            "priority, and unreviewed candidates remain report-only.",
-        )
-
-        self.record_conversion_candidates = wx.CheckBox(
-            self.settings_panel,
-            label=f"Record inactive candidates to {self.CONVERSION_CANDIDATES_FILENAME}",
-        )
-        self.record_conversion_candidates.SetValue(False)
-        diagnostics_sizer.Add(
-            self.record_conversion_candidates,
-            0,
-            wx.ALL,
-            6,
-        )
-
-        self.attempt_unresolved_item_writes = wx.CheckBox(
-            self.settings_panel,
-            label="Attempt unresolved item writes",
-        )
-        self.attempt_unresolved_item_writes.SetValue(False)
-        diagnostics_sizer.Add(
-            self.attempt_unresolved_item_writes,
-            0,
-            wx.ALL,
-            6,
-        )
-
-        self.include_amulet_conversion_audit = wx.CheckBox(
-            self.settings_panel,
-            label="Include Amulet conversion comparison audit in report",
-        )
-        self.include_amulet_conversion_audit.SetValue(False)
-        advanced_diagnostics_sizer.Add(
-            self.include_amulet_conversion_audit,
-            0,
-            wx.ALL,
-            6,
-        )
-
-        self.record_all_conversion_observations = wx.CheckBox(
-            self.settings_panel,
-            label="Record all resolved conversion observations",
-        )
-        self.record_all_conversion_observations.SetValue(False)
-        advanced_diagnostics_sizer.Add(
-            self.record_all_conversion_observations,
-            0,
-            wx.ALL,
-            6,
-        )
-        self._set_tooltip(
-            self.record_conversion_candidates,
-            "Records inactive conversion observations in a local candidate "
-            "file. This includes unresolved Amulet normalization candidates "
-            "and successful external language-assisted identity recoveries. The "
-            "plugin reads any existing candidate file only to merge observation "
-            "counts. Candidates never change exports or active conversion rules.",
-        )
-        self._set_tooltip(
-            self.attempt_unresolved_item_writes,
-            "Testing only. Allows unresolved generic item identifiers to be "
-            "written into storage and item frames so ghost or empty results "
-            "can be located in-game. Known dangerous technical blocks remain "
-            "blocked. Leave disabled for normal exports.",
-        )
-        self._set_tooltip(
-            self.include_amulet_conversion_audit,
-            "Reports which resolver layer chose each final item and compares "
-            "generic identifiers with Amulet normalization candidates. It is "
-            "report-only, bounded, local, and does not change exported items.",
-        )
-        self._set_tooltip(
-            self.record_all_conversion_observations,
-            "Advanced testing only. Records state-aware observations even when "
-            "the source family is already handled by a tested built-in resolver. "
-            "External language-assisted recoveries are recorded without enabling this "
-            "option. Leave it disabled to keep Conversion Candidates.BTSP focused.",
-        )
-
-        self._update_collapsible_settings_section("Performance")
-        self._update_collapsible_settings_section("Safety")
-        self._update_collapsible_settings_section("Debug and Diagnostics")
-        self._update_collapsible_settings_section("Advanced Diagnostics")
-
-        self._sizer.Add(self.settings_panel, 0, wx.ALL | wx.EXPAND, 0)
-
-        self.run_export_button = wx.Button(self, label="Delete Blocks to Storage")
+        self.browse_language_file_button.Bind(wx.EVT_BUTTON, self._browse_for_language_file)
         self.run_export_button.Bind(wx.EVT_BUTTON, self._run_export)
-        self._sizer.Add(self.run_export_button, 0, wx.ALL | wx.EXPAND, 6)
-
-        self.save_report_button = wx.Button(self, label="Save Last Report...")
+        self.manage_plugin_files_button.Bind(wx.EVT_BUTTON, self._manage_plugin_files)
         self.save_report_button.Bind(wx.EVT_BUTTON, self._save_last_report)
-        self.save_report_button.Enable(False)
-        self._sizer.Add(self.save_report_button, 0, wx.ALL | wx.EXPAND, 6)
 
-        self.text = wx.TextCtrl(
-            self,
-            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL,
-            size=(-1, 420),
+        for target in (console_title, self.console_card, self.text):
+            target.Bind(wx.EVT_ENTER_WINDOW, self._on_console_help_enter)
+            target.Bind(wx.EVT_LEAVE_WINDOW, self._on_console_help_leave)
+        for event_binder in (wx.EVT_LEFT_DOWN, wx.EVT_SET_FOCUS, wx.EVT_KEY_DOWN):
+            self.text.Bind(event_binder, self._on_console_text_interaction)
+
+        self._update_floating_minimum_size(resize_if_needed=True)
+        frame_sizer = wx.BoxSizer(wx.VERTICAL)
+        frame_sizer.Add(root, 1, wx.EXPAND)
+        self._plugin_window.SetSizer(frame_sizer)
+        self._plugin_window.Layout()
+        self._sync_main_content_width()
+        self._sync_settings_viewport()
+
+    def _bind_integer_slider_and_text(self, slider, text_box, minimum, maximum):
+        def from_slider(event=None):
+            text_box.ChangeValue(str(slider.GetValue()))
+            self._schedule_settings_config_save(event)
+
+        def from_text(event=None):
+            try:
+                value = int(text_box.GetValue().strip())
+            except Exception:
+                try:
+                    if event is not None:
+                        event.Skip()
+                except Exception:
+                    pass
+                return
+            value = max(int(minimum), min(int(maximum), value))
+            slider.SetValue(value)
+            self._schedule_settings_config_save(event)
+
+        def settle(_event=None):
+            try:
+                value = int(text_box.GetValue().strip())
+            except Exception:
+                value = slider.GetValue()
+            value = max(int(minimum), min(int(maximum), value))
+            slider.SetValue(value)
+            text_box.ChangeValue(str(value))
+            self._schedule_settings_config_save()
+
+        slider.Bind(wx.EVT_SLIDER, from_slider)
+        text_box.Bind(wx.EVT_TEXT, from_text)
+        text_box.Bind(wx.EVT_TEXT_ENTER, settle)
+        text_box.Bind(wx.EVT_KILL_FOCUS, settle)
+
+    def _show_plugin_window(self, _event=None):
+        window = self._plugin_window
+        if window is None or self._destroying:
+            return
+        try:
+            if window.IsIconized():
+                window.Iconize(False)
+            if not window.IsShown():
+                window.Show()
+                if not self._window_has_been_shown:
+                    self._position_plugin_window_at_amulet_edge()
+                    self._window_has_been_shown = True
+            window.Raise()
+            window.SetFocus()
+            self._update_launcher_status(True)
+            self._refresh_floating_layout()
+        except Exception:
+            pass
+
+    def _position_plugin_window_at_amulet_edge(self):
+        window = self._plugin_window
+        if window is None:
+            return
+        try:
+            owner = window.GetParent() or wx.GetTopLevelParent(self) or self
+            owner_rect = owner.GetScreenRect()
+            window_size = window.GetSize()
+            desired_x = int(owner_rect.x - window_size.width / 2)
+            desired_y = int(owner_rect.y + (owner_rect.height - window_size.height) / 2)
+        except Exception:
+            try:
+                window.CentreOnParent()
+            except Exception:
+                window.CentreOnScreen()
+            return
+        try:
+            display_index = wx.Display.GetFromWindow(owner)
+            if display_index == wx.NOT_FOUND:
+                display_index = 0
+            work_area = wx.Display(display_index).GetClientArea()
+            max_x = work_area.x + max(0, work_area.width - window_size.width)
+            max_y = work_area.y + max(0, work_area.height - window_size.height)
+            desired_x = max(work_area.x, min(desired_x, max_x))
+            desired_y = max(work_area.y, min(desired_y, max_y))
+        except Exception:
+            pass
+        try:
+            window.SetPosition((desired_x, desired_y))
+        except Exception:
+            pass
+
+    def _update_launcher_status(self, is_open):
+        try:
+            if is_open:
+                self.launcher_status.SetLabel("Status: Open")
+                self.open_window_button.SetLabel("Focus Window")
+            else:
+                self.launcher_status.SetLabel("Status: Closed")
+                self.open_window_button.SetLabel("Open Window")
+            self.Layout()
+        except Exception:
+            pass
+
+    def _bind_floating_window_geometry_events(self):
+        window = self._plugin_window
+        if window is None or self._window_geometry_events_ready:
+            return
+        try:
+            window.Bind(wx.EVT_SIZE, self._on_plugin_window_size)
+            self._window_geometry_events_ready = True
+        except Exception:
+            self._window_geometry_events_ready = False
+
+    def _on_plugin_window_size(self, event):
+        try:
+            event.Skip()
+        except Exception:
+            pass
+        window = self._plugin_window
+        if window is None:
+            return
+        try:
+            wx.CallAfter(self._refresh_floating_layout)
+        except Exception:
+            pass
+        if not self._window_geometry_events_ready or self._settings_config_applying:
+            return
+        try:
+            if window.IsIconized() or window.IsMaximized():
+                return
+            size = window.GetSize()
+            minimum_width, minimum_height = self._current_floating_minimum_size()
+            self._last_normal_window_size = [
+                max(minimum_width, int(size.width)),
+                max(minimum_height, int(size.height)),
+            ]
+        except Exception:
+            pass
+        self._schedule_settings_config_save()
+
+    def _current_window_size_config(self):
+        window = self._plugin_window
+        if window is None:
+            return list(self._last_normal_window_size)
+        try:
+            if window.IsIconized() or window.IsMaximized():
+                return list(self._last_normal_window_size)
+            size = window.GetSize()
+            minimum_width, minimum_height = self._current_floating_minimum_size()
+            self._last_normal_window_size = [
+                max(minimum_width, int(size.width)),
+                max(minimum_height, int(size.height)),
+            ]
+        except Exception:
+            pass
+        return list(self._last_normal_window_size)
+
+    def _apply_saved_window_size(self, data):
+        window = self._plugin_window
+        if window is None or not isinstance(data, dict):
+            return
+        ui_data = data.get("ui", {})
+        if not isinstance(ui_data, dict):
+            return
+        saved_size = ui_data.get("window_size")
+        if (
+            not isinstance(saved_size, (list, tuple))
+            or len(saved_size) != 2
+            or any(isinstance(value, bool) or not isinstance(value, int) for value in saved_size)
+        ):
+            return
+        minimum_width, minimum_height = self._current_floating_minimum_size()
+        width = max(minimum_width, int(saved_size[0]))
+        height = max(minimum_height, int(saved_size[1]))
+        try:
+            display_index = wx.Display.GetFromWindow(self.open_window_button)
+            if display_index == wx.NOT_FOUND:
+                display_index = 0
+            work_area = wx.Display(display_index).GetClientArea()
+            width = min(width, max(minimum_width, work_area.width))
+            height = min(height, max(minimum_height, work_area.height))
+        except Exception:
+            pass
+        self._last_normal_window_size = [width, height]
+        try:
+            window.SetSize((width, height))
+            window.Layout()
+        except Exception:
+            pass
+
+    def _current_manage_dialog_size_config(self):
+        try:
+            width = max(MANAGE_DIALOG_MIN_SIZE[0], int(self._last_manage_dialog_size[0]))
+            height = max(MANAGE_DIALOG_MIN_SIZE[1], int(self._last_manage_dialog_size[1]))
+            self._last_manage_dialog_size = [width, height]
+        except Exception:
+            self._last_manage_dialog_size = list(MANAGE_DIALOG_DEFAULT_SIZE)
+        return list(self._last_manage_dialog_size)
+
+    def _remember_manage_dialog_size(self, dialog):
+        if dialog is None or self._settings_config_applying:
+            return
+        try:
+            size = dialog.GetSize()
+            self._last_manage_dialog_size = [
+                max(MANAGE_DIALOG_MIN_SIZE[0], int(size.width)),
+                max(MANAGE_DIALOG_MIN_SIZE[1], int(size.height)),
+            ]
+        except Exception:
+            return
+        self._schedule_settings_config_save()
+
+    def _apply_saved_manage_dialog_size(self, data):
+        if not isinstance(data, dict):
+            return
+        ui_data = data.get("ui", {})
+        if not isinstance(ui_data, dict):
+            return
+        saved_size = ui_data.get("manage_window_size")
+        if (
+            not isinstance(saved_size, (list, tuple))
+            or len(saved_size) != 2
+            or any(isinstance(value, bool) or not isinstance(value, int) for value in saved_size)
+        ):
+            return
+        self._last_manage_dialog_size = [
+            max(MANAGE_DIALOG_MIN_SIZE[0], int(saved_size[0])),
+            max(MANAGE_DIALOG_MIN_SIZE[1], int(saved_size[1])),
+        ]
+
+    def _current_floating_minimum_size(self):
+        minimum_height = (
+            self.FLOATING_CONSOLE_VISIBLE_MIN_HEIGHT
+            if self._console_visible
+            else FLOATING_MIN_SIZE[1]
         )
-        self.text.SetName(self.CONSOLE_SEMANTIC_NAME)
-        self.text.SetMinSize((320, 260))
-        self.text.SetForegroundColour((0, 255, 0))
-        self.text.SetBackgroundColour((0, 0, 0))
-        self._sizer.Add(self.text, 1, wx.ALL | wx.EXPAND, 6)
+        return FLOATING_MIN_SIZE[0], minimum_height
 
-        self.SetSizer(self._sizer)
-        self.SetMinSize((380, 700))
+    def _update_floating_minimum_size(self, resize_if_needed=False):
+        window = self._plugin_window
+        if window is None:
+            return
+        minimum_width, minimum_height = self._current_floating_minimum_size()
+        try:
+            window.SetMinSize((_dip(window, minimum_width), _dip(window, minimum_height)))
+        except Exception:
+            return
+        if not resize_if_needed:
+            return
+        try:
+            if window.IsIconized() or window.IsMaximized():
+                return
+            size = window.GetSize()
+            width = max(int(size.width), _dip(window, minimum_width))
+            height = max(int(size.height), _dip(window, minimum_height))
+            if width != size.width or height != size.height:
+                window.SetSize((width, height))
+        except Exception:
+            pass
 
-        self._set_tooltip(
-            container_label,
-            "Choose which storage block will hold the collected blocks. Chests support the double chest option. Barrels and shulker boxes use normal 27-slot storage.",
+    def _apply_saved_console_visibility(self, data):
+        visible = True
+        try:
+            ui_data = data.get("ui", {}) if isinstance(data, dict) else {}
+            saved = ui_data.get("console_visible", True)
+            if isinstance(saved, bool):
+                visible = saved
+        except Exception:
+            visible = True
+        self._console_visible = bool(visible)
+        try:
+            self.console_card.Show(self._console_visible)
+            self.console_toggle_button.SetLabel(
+                "Hide Console" if self._console_visible else "Show Console"
+            )
+            self._hide_console_help()
+            self._update_floating_minimum_size(resize_if_needed=self._console_visible)
+            self._refresh_floating_layout()
+        except Exception:
+            pass
+
+    def _toggle_console(self, _event=None):
+        self._console_visible = not self._console_visible
+        self.console_card.Show(self._console_visible)
+        self.console_toggle_button.SetLabel(
+            "Hide Console" if self._console_visible else "Show Console"
         )
-        self._set_tooltip(
+        self._hide_console_help()
+        self._update_floating_minimum_size(resize_if_needed=self._console_visible)
+        self._refresh_floating_layout()
+        self._schedule_settings_config_save()
+
+    def _on_storage_icon_visibility_changed(self, event=None):
+        show_icons = bool(self.show_storage_icons_cb.GetValue())
+        for choice in (
             self.storage_choice,
-            "Choose which storage block will hold the collected blocks. Chests support the double chest option. Barrels and shulker boxes use normal 27-slot storage.",
-        )
-        self._set_tooltip(
-            shulker_color_label,
-            "Choose the shulker box color. Default creates the normal undyed shulker box.",
-        )
-        self._set_tooltip(
             self.shulker_color_choice,
-            "Choose the shulker box color. Default creates the normal undyed shulker box.",
-        )
-        self._set_tooltip(
-            stack_label,
-            "Controls how many storage blocks can stack vertically before the plugin starts a new line. Default is 8. Maximum is 40.",
-        )
-        self._set_tooltip(
-            self.stack_height,
-            "Controls how many storage blocks can stack vertically before the plugin starts a new line. Default is 8. Maximum is 40.",
-        )
-        self._set_tooltip(
-            self.include_unusual,
-            "Includes technical or normally unobtainable block forms when they "
-            "have a supported item representation. Leave disabled for normal "
-            "survival-friendly exports.",
-        )
-        self._set_tooltip(
-            self.preserve_bedrock,
-            "Keeps bedrock blocks in the selected area instead of replacing them with air. This is on by default to avoid deleting the bottom bedrock layer.",
-        )
-        self._set_tooltip(
-            self.fast_direct_scan,
-            "Scans blocks directly from chunk data instead of calling "
-            "get_version_block for every selected block. This is much faster on "
-            "large selections, but some older / legacy Minecraft Bedrock Edition "
-            "block names may be less specific.",
-        )
-        self._set_tooltip(
-            self.fast_direct_clear,
-            "Clears blocks directly in chunk data using one cached air block ID per chunk. This is faster than the safer per-block write helper. If it fails, the plugin falls back to the safer clear method.",
-        )
-        self._set_tooltip(
-            self.show_large_selection_warning,
-            "Shows a confirmation popup before running on selections estimated at 500,000 blocks or more.",
-        )
-        self._set_tooltip(
-            self.use_found_entries_cache,
-            f"Uses previously saved entries from {self.FOUND_ENTRIES_FILENAME} independently of the installed Minecraft language fallback. This is on by default. If the file is missing, empty or unreadable, the plugin safely continues with embedded names without repeated checks.",
-        )
-        self._set_tooltip(
-            self.use_installed_language_data,
-            "Allows unresolved ABC display names and conservative scan-identity recovery to use a local Minecraft Bedrock Edition en_US.lang file during an operation. This fallback does not update Found Entries.BTSP unless the separate update checkbox is enabled. Embedded verified names always keep priority.",
-        )
-        self._set_tooltip(
-            self.auto_detect_language_file,
-            "When enabled, checks only known Minecraft for Windows installation locations on available drive letters. It is off by default and does not recursively search any drive.",
-        )
-        self._set_tooltip(
-            self.language_file_label,
-            "Path to the Minecraft Bedrock Edition en_US.lang file used for unresolved display names.",
-        )
-        self._set_tooltip(
-            self.language_file_path,
-            "Path to the Minecraft Bedrock Edition en_US.lang file. You may enter a path manually or use Browse.",
-        )
-        self._set_tooltip(
-            self.browse_language_file_button,
-            "Select the Minecraft Bedrock Edition en_US.lang file manually.",
-        )
-        self._set_tooltip(
-            self.save_found_language_entries,
-            f"When checked, scans the configured Minecraft en_US.lang file once before each operation and atomically adds safe tile, item and block display-name entries missing from both the embedded table and {self.FOUND_ENTRIES_FILENAME}. When unchecked, no automatic full-file update scan occurs. Existing entries are preserved and embedded plugin data is never modified.",
-        )
-        self._set_tooltip(
-            self.manage_plugin_files_button,
-            "Manages saved settings and optional Blocks to Storage data files. "
-            "Settings can be reset, imported, exported, or deleted. Other files "
-            "can be created, deleted, or updated from the configured language file.",
-        )
-        self._set_tooltip(
-            self.simulate_missing_display_name,
-            "Testing only. Makes one item behave as though its embedded display-name entry is missing, allowing the Found Entries cache and installed language fallback to be tested without editing the plugin.",
-        )
-        self._set_tooltip(
-            self.simulated_missing_alias_label,
-            "Internal item alias to ignore in the embedded table during testing, for example oak_log.",
-        )
-        self._set_tooltip(
-            self.simulated_missing_alias,
-            "Internal item alias to ignore in the embedded table during testing, for example oak_log. Only one alias is supported.",
-        )
-        self._set_tooltip(
-            self.use_conversion_entries,
-            f"Reads reviewed local block-to-item rules from {self.CONVERSION_ENTRIES_FILENAME}. The plugin never writes active rules to this file. Built-in verified conversions keep priority. Missing, unreadable or malformed files fail safely and do not stop exports.",
-        )
-        self._set_tooltip(
-            self.include_item_frame_audit,
-            "Adds detailed item-frame label diagnostics to the export report, "
-            "including internal item keys, final Minecraft Bedrock Edition item "
-            "names, damage values, storage coordinates, frame coordinates and "
-            "Block-tag usage. Leave this disabled during normal use.",
-        )
-        self._set_tooltip(
-            self.include_display_name_audit,
-            "Adds display-name and ABC sorting diagnostics to the export report. It compares the language-based sort result with the fallback sort key without changing conversion, storage contents, item frames or placement. Leave this disabled during normal use.",
-        )
-        self._set_tooltip(
-            self.separate_types,
-            "Keeps each block type in its own storage group. Example: stone goes into its own containers, dirt goes into its own containers, and so on.",
-        )
-        self._set_tooltip(
-            self.add_group_item_frames,
-            "Only works when One block type per storage group is enabled. Adds one regular item frame or glow item frame to the first storage container for each block type group.",
-        )
-        self._set_tooltip(
-            self.group_spacing_label,
-            "Controls the empty side space between separated block groups. Only applies when One block type per storage group is enabled. Item frames automatically reserve front space separately.",
-        )
-        self._set_tooltip(
-            self.group_spacing,
-            "Controls the empty side space between separated block groups. Range is 0 to 8. Default is 1. Item frames automatically reserve front space separately.",
-        )
-        self._set_tooltip(
-            self.alphabetical_order,
-            "Sorts block types by their Minecraft Bedrock Edition display names "
-            "before packing them into storage. Verified language names are used "
-            "when available, with tested overrides and internal-name fallbacks "
-            "for unresolved or ambiguous items. Turning this off keeps first-seen "
-            "scan order.",
-        )
-        self._set_tooltip(
-            self.use_double_chests,
-            "Only applies when Storage container is set to Chest. Uses connected double chests with 54 slots instead of single chests with 27 slots.",
-        )
-        self._set_tooltip(
-            self.use_nested_shulker_storage,
-            "Advanced. Puts collected blocks into shulker boxes, then puts those shulker boxes inside the generated storage containers. This can greatly reduce how many containers are placed, but it uses more complex nested item data.",
-        )
-        self._set_tooltip(
-            self.nested_shulker_mode_label,
-            "Choose how nested shulker storage is used. Balanced mode leaves small block groups directly in storage and only uses shulker boxes for large groups. Compact mode uses shulker boxes for almost every group to save the most space.",
-        )
-        self._set_tooltip(
-            self.nested_shulker_mode_choice,
-            "Choose how nested shulker storage is used. Balanced mode leaves small block groups directly in storage and only uses shulker boxes for large groups. Compact mode uses shulker boxes for almost every group to save the most space.",
-        )
-        self._set_tooltip(
-            self.nested_shulker_color_label,
-            "Choose the color of the generated shulker boxes used inside storage containers. Default creates normal undyed shulker boxes.",
-        )
-        self._set_tooltip(
             self.nested_shulker_color_choice,
-            "Choose the color of the generated shulker boxes used inside storage containers. Default creates normal undyed shulker boxes.",
-        )
-        self._set_tooltip(
-            self.run_export_button,
-            "Scans the selected area, counts exportable source blocks and resulting items, clears the selected blocks, and places the collected items into the chosen storage type.",
-        )
-        self._set_tooltip(
-            self.save_report_button,
-            "Saves the latest export report as a text file. You can choose the save location after clicking this button.",
-        )
-        self._set_tooltip(
-            self.text,
-            "Shows the export log, source-block and item counts, skipped blocks, placement summary, timing, speed, and report details for the latest run.",
-        )
+        ):
+            try:
+                choice.SetShowIcons(show_icons)
+            except Exception:
+                pass
+        self._refresh_floating_layout()
+        self._schedule_settings_config_save(event)
 
-        self._initialize_settings_persistence()
-        self._update_option_visibility()
+    def _on_settings_scroll(self, event):
+        try:
+            event.Skip()
+        except Exception:
+            pass
+        if not self._scroll_refresh_pending:
+            self._scroll_refresh_pending = True
+            try:
+                wx.CallAfter(self._refresh_scrolled_custom_controls)
+            except Exception:
+                self._refresh_scrolled_custom_controls()
+        pending = self._scroll_refresh_call
+        if pending is not None:
+            try:
+                pending.Stop()
+            except Exception:
+                pass
+        try:
+            self._scroll_refresh_call = wx.CallLater(45, self._refresh_scrolled_custom_controls)
+        except Exception:
+            self._scroll_refresh_call = None
+
+    def _refresh_scrolled_custom_controls(self):
+        self._scroll_refresh_pending = False
+        self._scroll_refresh_call = None
+        scroll = getattr(self, "scroll", None)
+        if scroll is None:
+            return
+        try:
+            scroll.Refresh(True)
+        except Exception:
+            pass
+        pending = [scroll]
+        seen = set()
+        while pending:
+            parent = pending.pop()
+            marker = id(parent)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            try:
+                children = list(parent.GetChildren())
+            except Exception:
+                children = []
+            for child in children:
+                pending.append(child)
+                try:
+                    if child.IsShownOnScreen():
+                        child.Refresh(True)
+                except Exception:
+                    pass
+        try:
+            scroll.Update()
+        except Exception:
+            pass
+
+    def _sync_settings_viewport(self):
+        scroll = getattr(self, "scroll", None)
+        if scroll is None:
+            return
+        try:
+            scroll._modern_sync_layout()
+        except Exception:
+            pass
+        try:
+            self.settings_scrollbar.sync()
+        except Exception:
+            pass
+
+    def _refresh_floating_layout(self):
+        try:
+            self._sync_settings_viewport()
+        except Exception:
+            pass
+        try:
+            self._plugin_window.Layout()
+            self._plugin_window.Refresh(False)
+        except Exception:
+            pass
+
+    def _begin_operation_ui(self):
+        if self._operation_running:
+            return self._operation_ui_generation
+        self._set_tooltips_suspended(True)
+        self._operation_ui_generation += 1
+        generation = self._operation_ui_generation
+        self._operation_running = True
+        pending = self._operation_button_restore_call
+        self._operation_button_restore_call = None
+        if pending is not None:
+            try:
+                pending.Stop()
+            except Exception:
+                pass
+        try:
+            self.run_export_button.SetAvailable(True)
+            self.run_export_button.SetLabel("Processing...")
+            self.run_export_button.SetBusy(True)
+            self.status.SetLabel("Scanning and preparing storage...")
+        except Exception:
+            pass
+        return generation
+
+    def _restore_operation_buttons(self, generation):
+        if self._destroying or generation != self._operation_ui_generation or self._operation_running:
+            return
+        try:
+            self.run_export_button.SetAvailable(True)
+            self.run_export_button.SetBusy(False)
+            self.run_export_button.SetLabel("Scan & Store")
+            self.run_export_button.Refresh(False)
+            self.run_export_button.Update()
+        except Exception:
+            pass
+        try:
+            self.save_report_button.SetAvailable(bool(self._last_report_text))
+        except Exception:
+            pass
+
+    def _finish_operation_ui(self, status_label, generation):
+        if self._destroying or generation != self._operation_ui_generation:
+            return
+        self._operation_running = False
+
+        self._set_tooltips_suspended(True)
+        try:
+            self.status.SetLabel(status_label)
+        except Exception:
+            pass
+        self._restore_operation_buttons(generation)
+        self._schedule_operation_button_restore(generation, 0)
+        self._set_tooltips_suspended(False)
+
+    def _schedule_operation_button_restore(self, generation, attempt):
+        delays = (80, 180, 320, 520, 800)
+        if (
+            self._destroying
+            or generation != self._operation_ui_generation
+            or self._operation_running
+            or attempt >= len(delays)
+        ):
+            return
+        try:
+            self._operation_button_restore_call = wx.CallLater(
+                delays[attempt],
+                self._settle_operation_buttons,
+                generation,
+                attempt,
+            )
+        except Exception:
+            self._operation_button_restore_call = None
+
+    def _settle_operation_buttons(self, generation, attempt):
+        self._operation_button_restore_call = None
+        if self._destroying or generation != self._operation_ui_generation or self._operation_running:
+            return
+        self._restore_operation_buttons(generation)
+        self._schedule_operation_button_restore(generation, attempt + 1)
+
+    def _on_host_destroy(self, event):
+        try:
+            if event.GetEventObject() is not self:
+                event.Skip()
+                return
+        except Exception:
+            pass
+        self._destroying = True
+        pending = self._operation_button_restore_call
+        self._operation_button_restore_call = None
+        if pending is not None:
+            try:
+                pending.Stop()
+            except Exception:
+                pass
+        pending = self._scroll_refresh_call
+        self._scroll_refresh_call = None
+        if pending is not None:
+            try:
+                pending.Stop()
+            except Exception:
+                pass
+        try:
+            pending_save = self._settings_config_save_call
+            self._settings_config_save_call = None
+            if pending_save is not None:
+                pending_save.Stop()
+        except Exception:
+            pass
+        self._hide_control_help()
+        if self._control_help_window is not None:
+            try:
+                self._control_help_window.Destroy()
+            except Exception:
+                pass
+            self._control_help_window = None
+        self._hide_console_help()
+        if self._console_help_window is not None:
+            try:
+                self._console_help_window.Destroy()
+            except Exception:
+                pass
+            self._console_help_window = None
+        try:
+            self._write_settings_config(create_if_missing=True)
+        except Exception:
+            pass
+        window = self._plugin_window
+        self._plugin_window = None
+        if window is not None:
+            try:
+                window.Destroy()
+            except Exception:
+                pass
+        event.Skip()
+
+    def _tooltip_targets(self, window):
+        result = []
+        stack = [window]
+        seen = set()
+        while stack:
+            current = stack.pop()
+            if current is None or id(current) in seen:
+                continue
+            seen.add(id(current))
+            result.append(current)
+            try:
+                stack.extend(list(current.GetChildren()))
+            except Exception:
+                pass
+        return result
+
+    def _set_control_tooltip(self, window, text):
+        if window is None or not str(text).strip():
+            return
+        tooltip_text = str(text)
+        root_ref = weakref.ref(window)
+        for target in self._tooltip_targets(window):
+            try:
+                target.SetToolTip(None)
+            except Exception:
+                pass
+
+            def on_enter(event, anchor_ref=root_ref, value=tooltip_text):
+                self._on_control_help_enter(event, anchor_ref, value)
+
+            def on_leave(event, anchor_ref=root_ref):
+                self._on_control_help_leave(event, anchor_ref)
+
+            def on_interaction(event):
+                self._hide_control_help()
+                try:
+                    event.Skip()
+                except Exception:
+                    pass
+
+            try:
+                target.Bind(wx.EVT_ENTER_WINDOW, on_enter)
+                target.Bind(wx.EVT_LEAVE_WINDOW, on_leave)
+                target.Bind(wx.EVT_LEFT_DOWN, on_interaction)
+                target.Bind(wx.EVT_RIGHT_DOWN, on_interaction)
+                target.Bind(wx.EVT_MIDDLE_DOWN, on_interaction)
+                target.Bind(wx.EVT_SET_FOCUS, on_interaction)
+            except Exception:
+                pass
+
+    def _set_tooltips_suspended(self, suspended):
+        self._tooltips_suspended = bool(suspended)
+        if self._tooltips_suspended:
+            self._console_help_hovered = False
+            self._hide_control_help()
+            self._hide_console_help()
+
+    def _cancel_control_help(self):
+        pending = self._control_help_call
+        self._control_help_call = None
+        if pending is not None:
+            try:
+                pending.Stop()
+            except Exception:
+                pass
+
+    def _hide_control_help(self, clear_anchor=True):
+        self._cancel_control_help()
+        window = self._control_help_window
+        if window is not None:
+            try:
+                window.dismiss()
+            except Exception:
+                pass
+        if clear_anchor:
+            self._control_help_anchor_ref = None
+            self._control_help_text = ""
+
+    def _on_control_help_enter(self, event, anchor_ref, text):
+        try:
+            event.Skip()
+        except Exception:
+            pass
+
+        if (
+            getattr(self, "_tooltips_suspended", False)
+            or getattr(self, "_operation_running", False)
+            or getattr(self, "_destroying", False)
+        ):
+            self._hide_control_help()
+            return
+
+        try:
+            anchor = anchor_ref()
+        except Exception:
+            anchor = None
+        if anchor is None:
+            return
+
+        try:
+            current_anchor = (
+                self._control_help_anchor_ref()
+                if self._control_help_anchor_ref is not None
+                else None
+            )
+        except Exception:
+            current_anchor = None
+
+        same_tip = (
+            current_anchor is anchor
+            and self._control_help_text == str(text)
+        )
+        if same_tip:
+            try:
+                if self._control_help_call is not None or (
+                    self._control_help_window is not None
+                    and self._control_help_window.IsShown()
+                ):
+                    return
+            except Exception:
+                pass
+
+        self._hide_control_help()
+        self._control_help_anchor_ref = anchor_ref
+        self._control_help_text = str(text)
+        try:
+            self._control_help_call = wx.CallLater(
+                self.CONTROL_TOOLTIP_DELAY_MS,
+                self._show_control_help,
+            )
+        except Exception:
+            self._control_help_call = None
+
+    def _on_control_help_leave(self, event, anchor_ref):
+        try:
+            event.Skip()
+        except Exception:
+            pass
+
+        try:
+            wx.CallAfter(
+                self._hide_control_help_if_pointer_left,
+                anchor_ref,
+            )
+        except Exception:
+            self._hide_control_help_if_pointer_left(anchor_ref)
+
+    def _hide_control_help_if_pointer_left(self, anchor_ref):
+        try:
+            current_anchor = (
+                self._control_help_anchor_ref()
+                if self._control_help_anchor_ref is not None
+                else None
+            )
+        except Exception:
+            current_anchor = None
+        try:
+            leaving_anchor = anchor_ref()
+        except Exception:
+            leaving_anchor = None
+
+        if current_anchor is not leaving_anchor:
+            return
+
+        try:
+            if (
+                leaving_anchor is not None
+                and leaving_anchor.IsShownOnScreen()
+                and leaving_anchor.GetScreenRect().Contains(
+                    wx.GetMousePosition()
+                )
+            ):
+                return
+        except Exception:
+            pass
+
+        self._hide_control_help()
+
+    def _show_control_help(self):
+        self._control_help_call = None
+        if (
+            getattr(self, "_tooltips_suspended", False)
+            or getattr(self, "_operation_running", False)
+            or getattr(self, "_destroying", False)
+        ):
+            self._hide_control_help()
+            return
+
+        try:
+            anchor = (
+                self._control_help_anchor_ref()
+                if self._control_help_anchor_ref is not None
+                else None
+            )
+        except Exception:
+            anchor = None
+        if anchor is None or not self._control_help_text:
+            return
+
+        try:
+            if not anchor.IsShownOnScreen():
+                return
+            if not anchor.GetScreenRect().Contains(wx.GetMousePosition()):
+                return
+            if wx.GetMouseState().LeftIsDown():
+
+                self._control_help_call = wx.CallLater(
+                    120,
+                    self._show_control_help,
+                )
+                return
+        except Exception:
+            return
+
+        if self._control_help_window is None:
+            try:
+                owner = getattr(self, "_plugin_window", None)
+                if owner is None:
+                    owner = self.GetTopLevelParent()
+                self._control_help_window = CursorControlHint(owner)
+            except Exception:
+                self._control_help_window = None
+                return
+
+        try:
+            self._control_help_window.set_text(self._control_help_text)
+            self._control_help_window.show_at_pointer(anchor)
+        except Exception:
+            pass
+
+    def _cancel_console_help(self):
+        pending = self._console_help_call
+        self._console_help_call = None
+        if pending is not None:
+            try:
+                pending.Stop()
+            except Exception:
+                pass
+
+    def _hide_console_help(self):
+        self._cancel_console_help()
+        if self._console_help_window is not None:
+            try:
+                self._console_help_window.Hide()
+            except Exception:
+                pass
+
+    def _on_console_help_enter(self, event):
+        try:
+            event.Skip()
+        except Exception:
+            pass
+        if (
+            getattr(self, "_tooltips_suspended", False)
+            or getattr(self, "_operation_running", False)
+            or getattr(self, "_destroying", False)
+        ):
+            self._console_help_hovered = False
+            self._hide_console_help()
+            return
+        self._console_help_hovered = True
+        self._cancel_console_help()
+        try:
+            self._console_help_call = wx.CallLater(
+                self.CONSOLE_TOOLTIP_DELAY_MS,
+                self._show_console_help,
+            )
+        except Exception:
+            self._console_help_call = None
+
+    def _on_console_help_leave(self, event):
+        try:
+            event.Skip()
+        except Exception:
+            pass
+        self._console_help_hovered = False
+        self._hide_console_help()
+
+    def _on_console_text_interaction(self, event):
+        self._console_help_hovered = False
+        self._hide_console_help()
+        try:
+            event.Skip()
+        except Exception:
+            pass
+
+    def _show_console_help(self):
+        self._console_help_call = None
+        if (
+            getattr(self, "_tooltips_suspended", False)
+            or getattr(self, "_operation_running", False)
+            or getattr(self, "_destroying", False)
+            or not self._console_help_hovered
+            or not self._console_visible
+        ):
+            self._hide_console_help()
+            return
+        try:
+            if self.text.HasFocus() or wx.GetMouseState().LeftIsDown():
+                return
+        except Exception:
+            pass
+        if self._console_help_window is None:
+            try:
+                self._console_help_window = AnchoredConsoleHint(
+                    self._plugin_window,
+                    self._console_help_text,
+                )
+            except Exception:
+                self._console_help_window = None
+                return
+        try:
+            self._console_help_window.show_for(self.console_card)
+        except Exception:
+            pass
 
     def bind_events(self):
         super().bind_events()
@@ -3752,86 +10876,16 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     def _configure_tooltips(self) -> None:
         try:
             wx.ToolTip.SetDelay(450)
-        except Exception:
-            pass
-
-        try:
             wx.ToolTip.SetAutoPop(28000)
-        except Exception:
-            pass
-
-        try:
             wx.ToolTip.SetReshow(250)
         except Exception:
             pass
 
-    def _set_tooltip(self, window, text: str) -> None:
-        try:
-            window.SetToolTip(wx.ToolTip(text))
-        except Exception:
-            try:
-                window.SetToolTip(text)
-            except Exception:
-                pass
-
-    def _add_collapsible_settings_section(
-        self,
-        label: str,
-        expanded: bool = True,
-        parent_sizer: Optional[wx.BoxSizer] = None,
-    ) -> wx.BoxSizer:
-        header = wx.ToggleButton(
-            self.settings_panel,
-            label="",
-            style=wx.BU_LEFT,
-        )
-        content_sizer = wx.BoxSizer(wx.VERTICAL)
-
-        target_sizer = parent_sizer or self.settings_sizer
-        target_sizer.Add(
-            header,
-            0,
-            wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND,
-            6,
-        )
-        target_sizer.Add(
-            content_sizer,
-            0,
-            wx.LEFT | wx.RIGHT | wx.EXPAND,
-            6,
-        )
-
-        self._collapsible_settings_sections[label] = (
-            header,
-            content_sizer,
-        )
-        header.SetValue(bool(expanded))
+    def _on_collapsible_settings_section_toggled(self, event, label: str) -> None:
         self._update_collapsible_settings_section(label)
-        header.Bind(
-            wx.EVT_TOGGLEBUTTON,
-            lambda event, section_label=label: (
-                self._on_collapsible_settings_section_toggled(
-                    event,
-                    section_label,
-                )
-            ),
-        )
-        return content_sizer
-
-    def _on_collapsible_settings_section_toggled(
-        self,
-        event,
-        label: str,
-    ) -> None:
-        self._update_collapsible_settings_section(label)
-
-        if label == "Debug and Diagnostics":
-            self._update_collapsible_settings_section(
-                "Advanced Diagnostics"
-            )
-
+        if label == "Diagnostics":
+            self._update_collapsible_settings_section("Advanced Diagnostics")
         self._schedule_settings_config_save()
-
         try:
             event.Skip()
         except Exception:
@@ -3841,31 +10895,30 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         section = self._collapsible_settings_sections.get(label)
         if section is None:
             return
-
-        header, content_sizer = section
+        header = section[0]
+        content_sizer = section[1]
+        content_panel = section[2] if len(section) > 2 else None
         expanded = bool(header.GetValue())
-        marker = "▼" if expanded else "▶"
-        header.SetLabel(f"{marker} {label}")
-        content_sizer.ShowItems(expanded)
-
         try:
-            self.settings_panel.FitInside()
-            self.settings_panel.Layout()
-            self.Layout()
+            header.SetSectionLabel(label)
+        except Exception:
+            header.SetLabel(("▼ " if expanded else "▶ ") + label)
+        try:
+            content_sizer.ShowItems(expanded)
+            if content_panel is not None:
+                _set_window_sizer_item_visible(content_panel, expanded)
+            if label == "Diagnostics" and expanded:
+                child = self._collapsible_settings_sections.get("Advanced Diagnostics")
+                if child is not None:
+                    child_panel = child[2] if len(child) > 2 else None
+                    if child_panel is not None:
+                        _set_window_sizer_item_visible(
+                            child_panel,
+                            bool(child[0].GetValue()),
+                        )
         except Exception:
             pass
-
-    def _add_settings_section(self, label: str) -> None:
-        section_label = wx.StaticText(self.settings_panel, label=label)
-
-        try:
-            font = section_label.GetFont()
-            font.SetWeight(wx.FONTWEIGHT_BOLD)
-            section_label.SetFont(font)
-        except Exception:
-            pass
-
-        self.settings_sizer.Add(section_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 6)
+        self._refresh_floating_layout()
 
     def _needs_safe_block_lookup(self, item_name: Optional[str]) -> bool:
         if not item_name:
@@ -4438,145 +11491,148 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         finally:
             dialog.Destroy()
 
-    def _on_panel_resized(self, event) -> None:
-        self._resize_settings_panel()
-        try:
-            event.Skip()
-        except Exception:
-            pass
-
-    def _resize_settings_panel(self) -> None:
-        try:
-            _width, height = self.GetClientSize()
-        except Exception:
-            return
-
-        if height <= 0:
-            return
-
-        target_height = int(height * 0.48)
-        target_height = max(self.SETTINGS_PANEL_MIN_HEIGHT, target_height)
-        target_height = min(self.SETTINGS_PANEL_MAX_HEIGHT, target_height)
-
-        try:
-            self.settings_panel.SetMinSize((320, target_height))
-            self.settings_panel.SetInitialSize((-1, target_height))
-            self.settings_panel.FitInside()
-            self.settings_panel.Layout()
-            self.Layout()
-        except Exception:
-            pass
-
     def _update_option_visibility(self) -> None:
         container = self._get_selected_container()
-
         is_chest = container == self.CONTAINER_CHEST
         is_shulker = container == self.CONTAINER_SHULKER
-        separate_groups_enabled = self.separate_types.GetValue()
+        separate_groups_enabled = bool(self.separate_types.GetValue())
         nested_shulker_allowed = not is_shulker
         nested_shulker_enabled = (
             nested_shulker_allowed
-            and hasattr(self, "use_nested_shulker_storage")
-            and self.use_nested_shulker_storage.GetValue()
+            and bool(self.use_nested_shulker_storage.GetValue())
         )
 
-        self.use_double_chests.Show(is_chest)
-        self.add_group_item_frames.Show(separate_groups_enabled)
-        self.group_spacing_label.Show(separate_groups_enabled)
-        self.group_spacing.Show(separate_groups_enabled)
-
-        if hasattr(self, "use_nested_shulker_storage"):
-            self.use_nested_shulker_storage.Show(nested_shulker_allowed)
-
-        if hasattr(self, "nested_shulker_mode_row"):
-            for child in self.nested_shulker_mode_row.GetChildren():
-                window = child.GetWindow()
-                if window is not None:
-                    window.Show(nested_shulker_enabled)
-
-        if hasattr(self, "nested_shulker_color_row"):
-            for child in self.nested_shulker_color_row.GetChildren():
-                window = child.GetWindow()
-                if window is not None:
-                    window.Show(nested_shulker_enabled)
-
-        external_language_enabled = (
-            hasattr(self, "use_installed_language_data")
-            and self.use_installed_language_data.GetValue()
+        _set_window_sizer_item_visible(self.use_double_chests, is_chest)
+        _set_checkbox_group_bottom_spacing_visible(
+            self._double_chest_group_bottom_spacing,
+            is_chest,
         )
-        btsp_cache_enabled = (
-            hasattr(self, "use_found_entries_cache")
-            and self.use_found_entries_cache.GetValue()
+        _set_window_sizer_item_visible(
+            self.add_group_item_frames,
+            separate_groups_enabled,
         )
-        automatic_detection_checked = (
-            hasattr(self, "auto_detect_language_file")
-            and self.auto_detect_language_file.GetValue()
+        _set_window_sizer_item_visible(
+            self.group_spacing_label,
+            separate_groups_enabled,
         )
-        save_entries_checked = (
-            hasattr(self, "save_found_language_entries")
-            and self.save_found_language_entries.GetValue()
+        self._show_sizer_windows(
+            self.group_spacing_row,
+            separate_groups_enabled,
         )
-        simulation_checked = (
-            hasattr(self, "simulate_missing_display_name")
-            and self.simulate_missing_display_name.GetValue()
+        _set_sizer_item_visible(
+            self.group_spacing_row_item,
+            separate_groups_enabled,
+        )
+        _set_window_sizer_item_visible(
+            self.use_nested_shulker_storage,
+            nested_shulker_allowed,
+        )
+        _set_checkbox_group_bottom_spacing_visible(
+            self._nested_shulker_group_bottom_spacing,
+            nested_shulker_allowed,
+        )
+        self._show_sizer_windows(
+            self.nested_shulker_mode_row,
+            nested_shulker_enabled,
+        )
+        _set_sizer_item_visible(
+            self.nested_shulker_mode_row_item,
+            nested_shulker_enabled,
+        )
+        self._show_sizer_windows(
+            self.nested_shulker_color_row,
+            nested_shulker_enabled,
+        )
+        _set_sizer_item_visible(
+            self.nested_shulker_color_row_item,
+            nested_shulker_enabled,
+        )
+        self._show_sizer_windows(self.shulker_color_row, is_shulker)
+        _set_sizer_item_visible(
+            self.shulker_color_row_item,
+            is_shulker,
         )
 
+        external_language_enabled = bool(
+            self.use_installed_language_data.GetValue()
+        )
+        btsp_cache_enabled = bool(self.use_found_entries_cache.GetValue())
+        automatic_detection_checked = bool(
+            self.auto_detect_language_file.GetValue()
+        )
+        save_entries_checked = bool(
+            self.save_found_language_entries.GetValue()
+        )
+        simulation_checked = bool(
+            self.simulate_missing_display_name.GetValue()
+        )
         language_file_access_enabled = (
             external_language_enabled or save_entries_checked
         )
 
-        if hasattr(self, "auto_detect_language_file"):
-            self.auto_detect_language_file.Show(
-                language_file_access_enabled
-                or automatic_detection_checked
-            )
-
-        if hasattr(self, "language_file_row"):
-            show_manual_language_path = (
-                language_file_access_enabled
-                and not automatic_detection_checked
-            )
-            for child in self.language_file_row.GetChildren():
-                window = child.GetWindow()
-                if window is not None:
-                    window.Show(show_manual_language_path)
-
-        if hasattr(self, "save_found_language_entries"):
-
-            self.save_found_language_entries.Show(True)
-
-        if hasattr(self, "simulate_missing_display_name"):
-            self.simulate_missing_display_name.Show(
-                btsp_cache_enabled
-                or external_language_enabled
-                or simulation_checked
-            )
-
-        if hasattr(self, "simulated_missing_alias_row"):
-            for child in self.simulated_missing_alias_row.GetChildren():
-                window = child.GetWindow()
-                if window is not None:
-                    window.Show(simulation_checked)
+        language_source_options_visible = (
+            language_file_access_enabled or automatic_detection_checked
+        )
+        _set_window_sizer_item_visible(
+            self.auto_detect_language_file,
+            language_source_options_visible,
+        )
+        _set_checkbox_group_bottom_spacing_visible(
+            self._language_source_group_bottom_spacing,
+            language_source_options_visible,
+        )
+        language_file_row_visible = (
+            language_file_access_enabled
+            and not automatic_detection_checked
+        )
+        self._show_sizer_windows(
+            self.language_file_row,
+            language_file_row_visible,
+        )
+        _set_sizer_item_visible(
+            self.language_file_row_item,
+            language_file_row_visible,
+        )
+        _set_window_sizer_item_visible(
+            self.save_found_language_entries,
+            True,
+        )
+        _set_window_sizer_item_visible(
+            self.simulate_missing_display_name,
+            btsp_cache_enabled
+            or external_language_enabled
+            or simulation_checked,
+        )
+        self._show_sizer_windows(
+            self.simulated_missing_alias_row,
+            simulation_checked,
+        )
+        _set_sizer_item_visible(
+            self.simulated_missing_alias_row_item,
+            simulation_checked,
+        )
 
         if not separate_groups_enabled:
             self.add_group_item_frames.SetValue(False)
-
-        for child in self.shulker_color_row.GetChildren():
-            window = child.GetWindow()
-            if window is not None:
-                window.Show(is_shulker)
-
         if not is_chest:
             self.use_double_chests.SetValue(False)
-
-        if is_shulker and hasattr(self, "use_nested_shulker_storage"):
+        if is_shulker:
             self.use_nested_shulker_storage.SetValue(False)
 
+        for label in self._collapsible_settings_sections:
+            self._update_collapsible_settings_section(label)
+        self._refresh_floating_layout()
+
+    @staticmethod
+    def _show_sizer_windows(sizer, show):
         try:
-            self.settings_panel.FitInside()
-            self._resize_settings_panel()
-            self.Layout()
-            self.GetParent().Layout()
+            for child in sizer.GetChildren():
+                window = child.GetWindow()
+                nested = child.GetSizer()
+                if window is not None:
+                    _set_window_sizer_item_visible(window, show)
+                elif nested is not None:
+                    PluginClassName._show_sizer_windows(nested, show)
         except Exception:
             pass
 
@@ -4624,7 +11680,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             "Continue?"
         )
 
-        dialog = wx.MessageDialog(
+        dialog = DarkMessageDialog(
             self,
             message,
             "Confirm Large Operation",
@@ -4736,7 +11792,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._report_lines = []
         self._last_report_text = ""
         try:
-            self.save_report_button.Enable(False)
+            self.save_report_button.SetAvailable(False)
         except Exception:
             pass
 
@@ -4745,10 +11801,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         if self._last_report_text:
             try:
-                wx.CallAfter(self.save_report_button.Enable, True)
+                wx.CallAfter(self.save_report_button.SetAvailable, True)
             except Exception:
                 try:
-                    self.save_report_button.Enable(True)
+                    self.save_report_button.SetAvailable(True)
                 except Exception:
                     pass
 
@@ -4797,7 +11853,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     def _save_last_report(self, _):
         if not self._last_report_text:
-            wx.MessageBox(
+            _show_dark_message(
                 "No report is available yet. Run the exporter first.",
                 "No Report",
                 wx.OK | wx.ICON_INFORMATION,
@@ -4824,13 +11880,13 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 self._last_report_text + "\n",
                 replace_existing=True,
             )
-            wx.MessageBox(
+            _show_dark_message(
                 f"Report saved:\n{path}",
                 "Report Saved",
                 wx.OK | wx.ICON_INFORMATION,
             )
         except Exception as exc:
-            wx.MessageBox(
+            _show_dark_message(
                 f"Could not save report:\n{exc}",
                 "Save Failed",
                 wx.OK | wx.ICON_ERROR,
@@ -6300,6 +13356,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
     def _settings_control_registry(self):
         control_names = (
             "storage_choice",
+            "show_storage_icons_cb",
             "shulker_color_choice",
             "use_double_chests",
             "stack_height",
@@ -6333,60 +13390,64 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             "include_amulet_conversion_audit",
             "record_all_conversion_observations",
         )
-
-        registry = {}
-        for name in control_names:
-            control = getattr(self, name, None)
-            if control is not None:
-                registry[name] = control
-        return registry
+        return {
+            name: getattr(self, name)
+            for name in control_names
+            if getattr(self, name, None) is not None
+        }
 
     def _read_settings_control_value(self, control):
-        if isinstance(control, wx.CheckBox):
+        if isinstance(control, (wx.CheckBox, ModernCheckBox)):
             return bool(control.GetValue())
-        if isinstance(control, wx.Choice):
-            return str(control.GetStringSelection())
-        if isinstance(control, wx.SpinCtrl):
+        if isinstance(control, (wx.Choice, ModernChoice)):
+            selected = str(control.GetStringSelection())
+            if control in (
+                getattr(self, "shulker_color_choice", None),
+                getattr(self, "nested_shulker_color_choice", None),
+            ):
+                return _shulker_color_value(selected)
+            return selected
+        if isinstance(control, (wx.SpinCtrl, wx.Slider, ModernSlider)):
             return int(control.GetValue())
-        if isinstance(control, wx.TextCtrl):
+        if isinstance(control, (wx.TextCtrl, ModernTextField)):
             return str(control.GetValue())
         raise TypeError(f"Unsupported settings control: {type(control)!r}")
 
     def _apply_settings_control_value(self, control, value) -> bool:
         try:
-            if isinstance(control, wx.CheckBox):
+            if isinstance(control, (wx.CheckBox, ModernCheckBox)):
                 if not isinstance(value, bool):
                     return False
                 control.SetValue(value)
                 return True
-
-            if isinstance(control, wx.Choice):
+            if isinstance(control, (wx.Choice, ModernChoice)):
                 if not isinstance(value, str):
                     return False
-                index = control.FindString(value)
+                display_value = value
+                if control in (
+                    getattr(self, "shulker_color_choice", None),
+                    getattr(self, "nested_shulker_color_choice", None),
+                ):
+                    display_value = _shulker_color_label(value)
+                index = control.FindString(display_value)
                 if index == wx.NOT_FOUND:
                     return False
                 control.SetSelection(index)
                 return True
-
-            if isinstance(control, wx.SpinCtrl):
+            if isinstance(control, (wx.SpinCtrl, wx.Slider, ModernSlider)):
                 if isinstance(value, bool) or not isinstance(value, int):
                     return False
-                minimum = control.GetMin()
-                maximum = control.GetMax()
-                if value < minimum or value > maximum:
+                if value < control.GetMin() or value > control.GetMax():
                     return False
                 control.SetValue(value)
                 return True
-
-            if isinstance(control, wx.TextCtrl):
+            if isinstance(control, (wx.TextCtrl, ModernTextField)):
                 if not isinstance(value, str):
                     return False
                 control.SetValue(value)
                 return True
         except Exception:
             return False
-
         return False
 
     def _collect_current_settings_config(self) -> dict:
@@ -6396,20 +13457,22 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 settings[key] = self._read_settings_control_value(control)
             except Exception:
                 continue
-
         ui_state = {}
         for label, section in self._collapsible_settings_sections.items():
             try:
-                header, _ = section
-                ui_state[label] = bool(header.GetValue())
+                ui_state[label] = bool(section[0].GetValue())
             except Exception:
                 continue
-
         return {
             "format_version": self.SETTINGS_CONFIG_FORMAT_VERSION,
             "plugin": "Blocks to Storage",
             "settings": settings,
             "ui_state": ui_state,
+            "ui": {
+                "window_size": self._current_window_size_config(),
+                "manage_window_size": self._current_manage_dialog_size_config(),
+                "console_visible": bool(self._console_visible),
+            },
         }
 
     def _capture_settings_defaults(self) -> None:
@@ -6417,20 +13480,31 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
     def _load_settings_config_data(self, path: Path) -> Optional[dict]:
         try:
+            path = Path(path)
             if not path.is_file():
                 return None
             if path.stat().st_size > self.MAX_SETTINGS_CONFIG_BYTES:
                 raise ValueError("settings file exceeds the 1 MiB safety limit")
-
             with path.open("r", encoding="utf-8-sig") as handle:
                 data = json.load(handle)
-
             if not isinstance(data, dict):
                 raise ValueError("top-level JSON value must be an object")
-            if not isinstance(data.get("settings", {}), dict):
+            plugin_name = data.get("plugin")
+            if plugin_name is not None and plugin_name != "Blocks to Storage":
+                raise ValueError("the selected file belongs to another plugin")
+            settings = data.get("settings", {})
+            ui_state = data.get("ui_state", {})
+            ui = data.get("ui", {})
+            if not isinstance(settings, dict):
                 raise ValueError("'settings' must be a JSON object")
-            if not isinstance(data.get("ui_state", {}), dict):
+            if not isinstance(ui_state, dict):
                 raise ValueError("'ui_state' must be a JSON object")
+            if not isinstance(ui, dict):
+                raise ValueError("'ui' must be a JSON object")
+            if plugin_name is None:
+                recognized = set(settings).intersection(self._settings_control_registry())
+                if not recognized and not set(ui_state).intersection(self._collapsible_settings_sections):
+                    raise ValueError("the selected file does not contain recognizable Blocks to Storage settings")
             return data
         except Exception as exc:
             self._settings_config_load_error = str(exc)
@@ -6442,54 +13516,52 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             saved_settings = data.get("settings", {})
             for key, control in self._settings_control_registry().items():
                 if key in saved_settings:
-                    self._apply_settings_control_value(
-                        control,
-                        saved_settings[key],
-                    )
-
+                    self._apply_settings_control_value(control, saved_settings[key])
+            self.stack_height_box.ChangeValue(str(self.stack_height.GetValue()))
+            self.group_spacing_box.ChangeValue(str(self.group_spacing.GetValue()))
+            try:
+                show_icons = bool(self.show_storage_icons_cb.GetValue())
+                for choice in (
+                    self.storage_choice,
+                    self.shulker_color_choice,
+                    self.nested_shulker_color_choice,
+                ):
+                    choice.SetShowIcons(show_icons)
+            except Exception:
+                pass
             saved_ui_state = data.get("ui_state", {})
             for label, expanded in saved_ui_state.items():
                 section = self._collapsible_settings_sections.get(label)
-                if section is None or not isinstance(expanded, bool):
-                    continue
-                header, _ = section
-                header.SetValue(expanded)
+                if section is not None and isinstance(expanded, bool):
+                    section[0].SetValue(expanded)
 
-            self._on_storage_choice_changed(None)
-            self._on_separate_types_changed(None)
-            self._on_nested_shulker_storage_changed(None)
-            self._on_display_name_dependency_changed(None)
-            self._on_installed_language_data_changed(None)
-            self._on_auto_detect_language_file_changed(None)
-            self._on_simulate_missing_display_name_changed(None)
-
-            for label in self._collapsible_settings_sections:
-                self._update_collapsible_settings_section(label)
+            self._apply_saved_console_visibility(data)
+            self._apply_saved_window_size(data)
+            self._apply_saved_manage_dialog_size(data)
             self._update_option_visibility()
         finally:
             self._settings_config_applying = False
 
-    def _merge_settings_config_data(
-        self,
-        existing: Optional[dict],
-    ) -> dict:
+    def _merge_settings_config_data(self, existing: Optional[dict]) -> dict:
         merged = dict(existing) if isinstance(existing, dict) else {}
         current = self._collect_current_settings_config()
-
         merged["format_version"] = self.SETTINGS_CONFIG_FORMAT_VERSION
         merged["plugin"] = "Blocks to Storage"
-
         existing_settings = merged.get("settings")
         if not isinstance(existing_settings, dict):
             existing_settings = {}
         existing_settings.update(current["settings"])
         merged["settings"] = existing_settings
-
         existing_ui_state = merged.get("ui_state")
         if not isinstance(existing_ui_state, dict):
             existing_ui_state = {}
         existing_ui_state.update(current["ui_state"])
         merged["ui_state"] = existing_ui_state
+        existing_ui = merged.get("ui")
+        if not isinstance(existing_ui, dict):
+            existing_ui = {}
+        existing_ui.update(current["ui"])
+        merged["ui"] = existing_ui
         return merged
 
     def _write_settings_config(
@@ -6570,54 +13642,89 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._write_settings_config(create_if_missing=True)
 
     def _bind_settings_persistence_events(self) -> None:
+        custom_handled = {
+            id(self.storage_choice),
+            id(self.show_storage_icons_cb),
+            id(self.separate_types),
+            id(self.use_nested_shulker_storage),
+            id(self.use_found_entries_cache),
+            id(self.use_installed_language_data),
+            id(self.auto_detect_language_file),
+            id(self.save_found_language_entries),
+            id(self.simulate_missing_display_name),
+            id(self.stack_height),
+            id(self.group_spacing),
+        }
         for control in self._settings_control_registry().values():
+            if id(control) in custom_handled:
+                continue
             try:
-                if isinstance(control, wx.CheckBox):
-                    control.Bind(
-                        wx.EVT_CHECKBOX,
-                        self._schedule_settings_config_save,
-                    )
-                elif isinstance(control, wx.Choice):
-                    control.Bind(
-                        wx.EVT_CHOICE,
-                        self._schedule_settings_config_save,
-                    )
-                elif isinstance(control, wx.SpinCtrl):
-                    control.Bind(
-                        wx.EVT_SPINCTRL,
-                        self._schedule_settings_config_save,
-                    )
-                    control.Bind(
-                        wx.EVT_TEXT,
-                        self._schedule_settings_config_save,
-                    )
-                elif isinstance(control, wx.TextCtrl):
-                    control.Bind(
-                        wx.EVT_TEXT,
-                        self._schedule_settings_config_save,
-                    )
+                if isinstance(control, (wx.CheckBox, ModernCheckBox)):
+                    control.Bind(wx.EVT_CHECKBOX, self._schedule_settings_config_save)
+                elif isinstance(control, (wx.Choice, ModernChoice)):
+                    control.Bind(wx.EVT_CHOICE, self._schedule_settings_config_save)
+                elif isinstance(control, (wx.SpinCtrl, wx.Slider, ModernSlider)):
+                    control.Bind(wx.EVT_SLIDER, self._schedule_settings_config_save)
+                elif isinstance(control, (wx.TextCtrl, ModernTextField)):
+                    control.Bind(wx.EVT_TEXT, self._schedule_settings_config_save)
             except Exception:
                 continue
 
     def _initialize_settings_persistence(self) -> None:
         self._capture_settings_defaults()
         path = self._get_settings_config_path()
+        self._settings_config_load_error = ""
         data = self._load_settings_config_data(path)
-
         if data is not None:
             self._apply_settings_config_data(data)
-
             self._write_settings_config(create_if_missing=False)
-
+        else:
+            self._update_option_visibility()
+            if path.is_file() and self._settings_config_load_error:
+                try:
+                    self.status.SetLabel("Settings file needs repair. Use Manage Files.")
+                except Exception:
+                    pass
         self._bind_settings_persistence_events()
 
-    def _reset_settings_to_defaults(self) -> None:
+    def _stop_pending_settings_save(self) -> None:
+        pending = self._settings_config_save_call
+        self._settings_config_save_call = None
+        if pending is not None:
+            try:
+                pending.Stop()
+            except Exception:
+                pass
+
+    def _reset_settings_to_defaults(self) -> bool:
         defaults = self._settings_defaults
         if not isinstance(defaults, dict):
-            return
+            return False
 
+        normalized = json.dumps(
+            defaults,
+            indent=2,
+            ensure_ascii=False,
+            sort_keys=True,
+        ) + "\n"
+
+        self._stop_pending_settings_save()
+        try:
+            path = self._get_settings_config_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._write_text_atomically(
+                path,
+                normalized,
+                replace_existing=True,
+            )
+        except Exception as exc:
+            self._settings_config_write_error = str(exc)
+            return False
+
+        self._settings_config_load_error = ""
+        self._settings_config_write_error = ""
         self._apply_settings_config_data(defaults)
-        self._write_settings_config(create_if_missing=True)
+        return True
 
     def _repair_json_missing_line_commas(self, content: str) -> str:
         lines = content.splitlines()
@@ -6708,12 +13815,24 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         if not isinstance(data, dict):
             return False, "The top-level value is not an object."
 
+        plugin_name = data.get("plugin")
+        if plugin_name is not None and plugin_name != "Blocks to Storage":
+            return False, "The file identifies another plugin."
+
         settings = data.get("settings", {})
         ui_state = data.get("ui_state", {})
+        ui = data.get("ui", {})
         if not isinstance(settings, dict):
             return False, "The settings entry is not an object."
         if not isinstance(ui_state, dict):
             return False, "The ui_state entry is not an object."
+        if not isinstance(ui, dict):
+            return False, "The ui entry is not an object."
+
+        if plugin_name is None:
+            recognized = set(settings).intersection(self._settings_control_registry())
+            if not recognized and not set(ui_state).intersection(self._collapsible_settings_sections):
+                return False, "The file does not contain recognizable Blocks to Storage settings."
 
         return True, ""
 
@@ -6751,12 +13870,21 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 recovered_ui_state.setdefault(key, value)
         merged["ui_state"] = recovered_ui_state
 
+        recovered_ui = merged.get("ui")
+        if not isinstance(recovered_ui, dict):
+            recovered_ui = {}
+        default_ui = defaults.get("ui", {})
+        if isinstance(default_ui, dict):
+            for key, value in default_ui.items():
+                recovered_ui.setdefault(key, value)
+        merged["ui"] = recovered_ui
+
         return merged
 
     def _repair_existing_settings_config(self) -> None:
         path = self._get_settings_config_path()
         if not path.is_file():
-            wx.MessageBox(
+            _show_dark_message(
                 "No active Blocks to Storage settings file was found.",
                 "Blocks to Storage",
                 wx.OK | wx.ICON_INFORMATION,
@@ -6772,7 +13900,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 errors="strict",
             )
         except Exception as exc:
-            wx.MessageBox(
+            _show_dark_message(
                 f"The settings file could not be read.\n\nReason: {exc}",
                 "Blocks to Storage",
                 wx.OK | wx.ICON_WARNING,
@@ -6784,7 +13912,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             content
         )
         if repaired_data is None:
-            wx.MessageBox(
+            _show_dark_message(
                 "The settings file could not be repaired safely.\n\n"
                 "No changes were made. Correct the JSON manually or import a "
                 "known-good settings file.",
@@ -6796,7 +13924,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         valid, reason = self._validate_repaired_settings_config(repaired_data)
         if not valid:
-            wx.MessageBox(
+            _show_dark_message(
                 "The settings file could not be repaired safely.\n\n"
                 f"Reason: {reason}\n\nNo changes were made.",
                 "Blocks to Storage",
@@ -6830,7 +13958,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 ]
             )
 
-        confirmation = wx.MessageDialog(
+        confirmation = DarkMessageDialog(
             self,
             "\n".join(confirmation_lines),
             "Repair settings config?",
@@ -6850,6 +13978,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             sort_keys=True,
         ) + "\n"
 
+        self._stop_pending_settings_save()
         try:
             self._write_text_atomically(
                 path,
@@ -6857,7 +13986,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 replace_existing=True,
             )
         except Exception as exc:
-            wx.MessageBox(
+            _show_dark_message(
                 f"The repaired settings file could not be written.\n\nReason: {exc}",
                 "Blocks to Storage",
                 wx.OK | wx.ICON_WARNING,
@@ -6869,7 +13998,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._settings_config_write_error = ""
         self._apply_settings_config_data(merged)
 
-        wx.MessageBox(
+        _show_dark_message(
             "The settings file was repaired and reloaded successfully.",
             "Blocks to Storage",
             wx.OK | wx.ICON_INFORMATION,
@@ -6892,7 +14021,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
 
         data = self._load_settings_config_data(source_path)
         if data is None:
-            wx.MessageBox(
+            _show_dark_message(
                 "The selected settings file could not be imported.\n\n"
                 f"Reason: {self._settings_config_load_error or 'Invalid file'}",
                 "Blocks to Storage",
@@ -6901,7 +14030,6 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             )
             return
 
-        self._apply_settings_config_data(data)
         merged = self._merge_recovered_settings_config_data(data)
         content = json.dumps(
             merged,
@@ -6910,6 +14038,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             sort_keys=True,
         ) + "\n"
 
+        self._stop_pending_settings_save()
         try:
             active_path = self._get_settings_config_path()
             active_path.parent.mkdir(parents=True, exist_ok=True)
@@ -6922,9 +14051,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             self._settings_config_write_error = ""
         except Exception as exc:
             self._settings_config_write_error = str(exc)
-            wx.MessageBox(
-                "The settings were loaded, but the active settings file could "
-                "not be written.\n\n"
+            _show_dark_message(
+                "The selected settings were valid, but the active settings file "
+                "could not be written. The visible settings were not changed.\n\n"
                 f"Reason: {self._settings_config_write_error}",
                 "Blocks to Storage",
                 wx.OK | wx.ICON_WARNING,
@@ -6932,7 +14061,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             )
             return
 
-        wx.MessageBox(
+        self._apply_settings_config_data(merged)
+        _show_dark_message(
             "Settings imported successfully.",
             "Blocks to Storage",
             wx.OK | wx.ICON_INFORMATION,
@@ -6972,7 +14102,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 replace_existing=True,
             )
         except Exception as exc:
-            wx.MessageBox(
+            _show_dark_message(
                 f"Could not export the settings file.\n\nReason: {exc}",
                 "Blocks to Storage",
                 wx.OK | wx.ICON_WARNING,
@@ -6980,7 +14110,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             )
             return
 
-        wx.MessageBox(
+        _show_dark_message(
             "Settings exported successfully.",
             "Blocks to Storage",
             wx.OK | wx.ICON_INFORMATION,
@@ -7034,8 +14164,8 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         ):
             try:
                 directory.mkdir(parents=True, exist_ok=True)
-                probe = directory / ".btsp_write_test.tmp"
-                probe.write_text("test", encoding="utf-8")
+                probe = directory / ".btsp_write_probe.tmp"
+                probe.write_text("probe", encoding="utf-8")
                 probe.unlink()
                 return directory / filename
             except Exception:
@@ -7055,7 +14185,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 "# Blocks to Storage reviewed conversion rules\n"
                 "# Rules in this file affect exported items.\n"
                 "# The plugin reads this file but never writes active rules to it.\n"
-                "# Add only mappings that have been reviewed and tested.\n"
+                "# Add only mappings that have been reviewed and verified.\n"
                 "# Format: minecraft:source=minecraft:target\n"
             )
         if filename == self.CONVERSION_CANDIDATES_FILENAME:
@@ -7102,12 +14232,14 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                     raise ValueError("top-level value is not an object")
                 settings = data.get("settings", {})
                 ui_state = data.get("ui_state", {})
-                if not isinstance(settings, dict) or not isinstance(
-                    ui_state,
-                    dict,
+                ui = data.get("ui", {})
+                if (
+                    not isinstance(settings, dict)
+                    or not isinstance(ui_state, dict)
+                    or not isinstance(ui, dict)
                 ):
-                    raise ValueError("settings or ui_state is not an object")
-                count = len(settings) + len(ui_state)
+                    raise ValueError("settings, ui_state or ui is not an object")
+                count = len(settings) + len(ui_state) + len(ui)
                 return f"{count:,}", "Valid"
             except Exception as exc:
                 return "Unknown", f"Malformed: {exc}"
@@ -7124,7 +14256,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 if len(line.split("\t")) != 4:
                     malformed += 1
             elif filename == self.CONVERSION_ENTRIES_FILENAME:
-                if "->" not in line and "\t" not in line:
+                if "=" not in line and "->" not in line and "\t" not in line:
                     malformed += 1
 
         status = "Valid" if malformed == 0 else f"Malformed: {malformed}"
@@ -7186,99 +14318,20 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self,
         actions: Sequence[Tuple[str, str]],
     ) -> Optional[int]:
-        dialog_parent = wx.GetTopLevelParent(self) or self
-        dialog = wx.Dialog(
-            dialog_parent,
-            title="Manage plugin files",
-            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
+        parent = wx.GetTopLevelParent(self) or self
+        dialog = DarkActionPickerDialog(
+            parent,
+            actions,
+            initial_size=self._current_manage_dialog_size_config(),
+            on_size_changed=self._remember_manage_dialog_size,
         )
         try:
-            outer_sizer = wx.BoxSizer(wx.VERTICAL)
-
-            description_panel = wx.Panel(dialog)
-            description_panel.SetMinSize((420, 72))
-            description_sizer = wx.BoxSizer(wx.VERTICAL)
-            description_label = wx.StaticText(
-                description_panel,
-                label="Choose what to do with plugin-managed files.",
-            )
-            description_label.Wrap(420)
-            description_sizer.Add(
-                description_label,
-                1,
-                wx.ALL | wx.EXPAND,
-                0,
-            )
-            description_panel.SetSizer(description_sizer)
-            outer_sizer.Add(
-                description_panel,
-                0,
-                wx.ALL | wx.EXPAND,
-                10,
-            )
-
-            action_list = wx.ListBox(
-                dialog,
-                choices=[label for label, _description in actions],
-                style=wx.LB_SINGLE,
-            )
-            outer_sizer.Add(
-                action_list,
-                1,
-                wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
-                10,
-            )
-
-            button_sizer = wx.StdDialogButtonSizer()
-            ok_button = wx.Button(dialog, wx.ID_OK, "Open")
-            close_button = wx.Button(dialog, wx.ID_CANCEL, "Close")
-            ok_button.Disable()
-            button_sizer.AddButton(ok_button)
-            button_sizer.AddButton(close_button)
-            button_sizer.Realize()
-            outer_sizer.Add(
-                button_sizer,
-                0,
-                wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.ALIGN_RIGHT,
-                10,
-            )
-
-            def update_description(_event=None) -> None:
-                selection = action_list.GetSelection()
-                if selection == wx.NOT_FOUND:
-                    description_label.SetLabel(
-                        "Choose what to do with plugin-managed files."
-                    )
-                    ok_button.Disable()
-                else:
-                    description_label.SetLabel(actions[selection][1])
-                    ok_button.Enable()
-                description_label.Wrap(420)
-                description_panel.Layout()
-
-            action_list.Bind(wx.EVT_LISTBOX, update_description)
-            action_list.Bind(
-                wx.EVT_LISTBOX_DCLICK,
-                lambda _event: dialog.EndModal(wx.ID_OK)
-                if action_list.GetSelection() != wx.NOT_FOUND
-                else None,
-            )
-
-            dialog.SetSizerAndFit(outer_sizer)
-            dialog.SetMinSize((470, 380))
-            dialog.SetSize((520, 390))
-            try:
-                dialog.CentreOnParent()
-            except Exception:
-                dialog.Centre()
-
-            if dialog.ShowModal() != wx.ID_OK:
+            result = dialog.ShowModal()
+            self._remember_manage_dialog_size(dialog)
+            if result != wx.ID_OK:
                 return None
-
-            selection = action_list.GetSelection()
-            if selection == wx.NOT_FOUND:
-                return None
-            return int(selection)
+            selection = dialog.GetSelection()
+            return int(selection) if selection != wx.NOT_FOUND else None
         finally:
             dialog.Destroy()
 
@@ -7354,7 +14407,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                         str(self._get_plugin_directory())
                     )
                 except Exception as exc:
-                    wx.MessageBox(
+                    _show_dark_message(
                         f"Could not open the plugin folder.\n\nReason: {exc}",
                         "Blocks to Storage",
                         wx.OK | wx.ICON_WARNING,
@@ -7368,7 +14421,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                     settings_directory.mkdir(parents=True, exist_ok=True)
                     wx.LaunchDefaultApplication(str(settings_directory))
                 except Exception as exc:
-                    wx.MessageBox(
+                    _show_dark_message(
                         f"Could not open the settings folder.\n\nReason: {exc}",
                         "Blocks to Storage",
                         wx.OK | wx.ICON_WARNING,
@@ -7377,7 +14430,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 continue
 
             if action == 4:
-                confirmation = wx.MessageDialog(
+                confirmation = DarkMessageDialog(
                     self,
                     "Reset all Blocks to Storage settings to their current "
                     "defaults?\n\nThe settings file will remain and will be "
@@ -7386,10 +14439,25 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                     wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
                 )
                 try:
-                    if confirmation.ShowModal() == wx.ID_YES:
-                        self._reset_settings_to_defaults()
+                    confirmed = confirmation.ShowModal() == wx.ID_YES
                 finally:
                     confirmation.Destroy()
+                if confirmed:
+                    if self._reset_settings_to_defaults():
+                        _show_dark_message(
+                            "Blocks to Storage settings were reset successfully.",
+                            "Blocks to Storage",
+                            wx.OK | wx.ICON_INFORMATION,
+                            self,
+                        )
+                    else:
+                        _show_dark_message(
+                            "The settings could not be reset.\n\n"
+                            f"Reason: {self._settings_config_write_error or 'Unknown error'}",
+                            "Blocks to Storage",
+                            wx.OK | wx.ICON_WARNING,
+                            self,
+                        )
                 continue
 
             if action == 5:
@@ -7408,20 +14476,14 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 self._synchronize_found_entries_from_language_file()
                 continue
 
-            selection_dialog = wx.MultiChoiceDialog(
-                self,
-                "Select the plugin files to create or delete.\n\n"
-                "Choose Cancel to go back to the main file-management menu.",
-                "Manage plugin files - Select files / Back",
+            selection_dialog = DarkMultiChoiceDialog(
+                wx.GetTopLevelParent(self) or self,
+                "Select plugin files",
+                "Select the plugin-managed files to create or delete. Back returns "
+                "to the main file-management menu.",
                 labels,
             )
             try:
-                back_button = selection_dialog.FindWindowById(wx.ID_CANCEL)
-                if back_button is not None:
-                    back_button.SetLabel("Back")
-                    back_button.SetToolTip(
-                        "Return to the main file-management menu."
-                    )
                 if selection_dialog.ShowModal() != wx.ID_OK:
                     continue
                 selections = list(selection_dialog.GetSelections())
@@ -7429,7 +14491,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 selection_dialog.Destroy()
 
             if not selections:
-                wx.MessageBox(
+                _show_dark_message(
                     "No files were selected.",
                     "Blocks to Storage",
                     wx.OK | wx.ICON_INFORMATION,
@@ -7493,7 +14555,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                         for name, reason in failed
                     )
 
-                wx.MessageBox(
+                _show_dark_message(
                     "\n".join(lines) if lines else "No files were created.",
                     "Blocks to Storage",
                     wx.OK | (
@@ -7505,7 +14567,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 )
                 continue
 
-            confirmation = wx.MessageDialog(
+            confirmation = DarkMessageDialog(
                 self,
                 "Delete the selected plugin-managed files?\n\n"
                 + "\n".join(f"• {name}" for name in selected_names)
@@ -7519,6 +14581,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                     continue
             finally:
                 confirmation.Destroy()
+
+            if self.SETTINGS_CONFIG_FILENAME in selected_names:
+                self._stop_pending_settings_save()
 
             deleted = []
             failed = []
@@ -7545,9 +14610,16 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             self._clear_loaded_conversion_data()
 
             if self.SETTINGS_CONFIG_FILENAME in selected_names:
-                self._apply_settings_config_data(self._settings_defaults)
-                self._settings_config_load_error = ""
-                self._settings_config_write_error = ""
+                config_still_exists = any(
+                    path.is_file()
+                    for path in self._get_managed_file_candidates(
+                        self.SETTINGS_CONFIG_FILENAME
+                    )
+                )
+                if not config_still_exists:
+                    self._apply_settings_config_data(self._settings_defaults)
+                    self._settings_config_load_error = ""
+                    self._settings_config_write_error = ""
 
             lines = []
             if deleted:
@@ -7562,7 +14634,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                     for path, reason in failed
                 )
 
-            wx.MessageBox(
+            _show_dark_message(
                 "\n".join(lines) if lines else "No selected files were found.",
                 "Blocks to Storage",
                 wx.OK | (
@@ -7597,10 +14669,10 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         for directory in candidate_directories:
             try:
                 directory.mkdir(parents=True, exist_ok=True)
-                test_path = directory / ".btsp_write_test.tmp"
-                with test_path.open("w", encoding="utf-8") as handle:
-                    handle.write("test")
-                test_path.unlink()
+                probe_path = directory / ".btsp_write_probe.tmp"
+                with probe_path.open("w", encoding="utf-8") as handle:
+                    handle.write("probe")
+                probe_path.unlink()
                 return directory / self.FOUND_ENTRIES_FILENAME
             except Exception:
                 continue
@@ -9418,7 +16490,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         )
         if not item_supported:
             self._log(
-                "  Item translator tests skipped after the cached probe marked "
+                "  Item translator checks skipped after the cached probe marked "
                 f"the translator unusable ({item_detail})."
             )
 
@@ -9708,7 +16780,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         )
 
         if language_path is None:
-            wx.MessageBox(
+            _show_dark_message(
                 "No readable Minecraft en_US.lang file was found.\n\n"
                 "Choose the file in Display-name data or enable automatic "
                 "detection, then try again.",
@@ -9731,7 +16803,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             self._external_language_prepared = True
         except Exception as exc:
             self._external_language_load_error = str(exc)
-            wx.MessageBox(
+            _show_dark_message(
                 f"Could not read the selected Minecraft language file.\n\n"
                 f"Reason: {exc}",
                 "Blocks to Storage",
@@ -9746,7 +16818,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         self._write_pending_found_entries()
 
         if self._found_entries_write_error:
-            wx.MessageBox(
+            _show_dark_message(
                 f"The language file was scanned, but "
                 f"{self.FOUND_ENTRIES_FILENAME} could not be updated.\n\n"
                 f"Reason: {self._found_entries_write_error}",
@@ -9768,7 +16840,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 f"{self.FOUND_ENTRIES_FILENAME}."
             )
 
-        wx.MessageBox(
+        _show_dark_message(
             f"Scanned {self._external_language_loaded_count:,} relevant "
             f"language aliases from:\n{language_path}\n\n{result_text}",
             "Blocks to Storage",
@@ -10341,11 +17413,13 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         color = "default"
 
         try:
-            color = self.nested_shulker_color_choice.GetStringSelection()
+            color = _shulker_color_value(
+                self.nested_shulker_color_choice.GetStringSelection()
+            )
         except Exception:
             pass
 
-        if not color or color == "default":
+        if color == "default":
             return "minecraft:undyed_shulker_box"
 
         return f"minecraft:{color}_shulker_box"
@@ -11465,9 +18539,9 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         block_cache: Dict[str, Block] = {}
 
         if container == self.CONTAINER_SHULKER:
-            shulker_color = self.shulker_color_choice.GetStringSelection()
-            if not shulker_color:
-                shulker_color = "default"
+            shulker_color = _shulker_color_value(
+                self.shulker_color_choice.GetStringSelection()
+            )
         else:
             shulker_color = "default"
 
@@ -11822,18 +18896,28 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         )
 
     def _run_export(self, _):
+        if self._operation_running:
+            return
+
+        self._set_tooltips_suspended(True)
         self._clear_log()
         self._reset_report()
         self._update_option_visibility()
-
         if not self._confirm_large_selection():
             self._log("Operation cancelled before start by large selection warning.")
             self._finalize_report()
+            try:
+                self.status.SetLabel("Cancelled before start.")
+            except Exception:
+                pass
+            self._set_tooltips_suspended(False)
             return
 
+        generation = self._begin_operation_ui()
+        self._active_operation_ui_generation = generation
         try:
             self.canvas.run_operation(
-                self._run_export_operation,
+                self._run_export_operation_guarded,
                 title="Blocks to Storage",
                 msg="Moving selected blocks into storage...",
                 throw_exceptions=False,
@@ -11841,7 +18925,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
         except TypeError:
             try:
                 self.canvas.run_operation(
-                    self._run_export_operation,
+                    self._run_export_operation_guarded,
                     "Blocks to Storage",
                     "Moving selected blocks into storage...",
                     False,
@@ -11849,12 +18933,41 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             except Exception as exc:
                 self._log(f"Operation failed to start: {exc}")
                 self._finalize_report()
+                self._operation_running = False
+                self._finish_operation_ui("Failed to start. Review the report.", generation)
         except Exception as exc:
             self._log(f"Operation failed to start: {exc}")
             self._finalize_report()
+            self._operation_running = False
+            self._finish_operation_ui("Failed to start. Review the report.", generation)
+
+    def _run_export_operation_guarded(self):
+        try:
+            self._run_export_operation()
+        except Exception as exc:
+            self._log("")
+            self._log(f"Operation failed during preparation: {exc}")
+            try:
+                self._finalize_report()
+            finally:
+                self._release_operation_display_name_caches()
+                self._release_operation_conversion_caches()
+                self._release_amulet_translator_capability_state()
+                try:
+                    wx.CallAfter(
+                        self._finish_operation_ui,
+                        "Operation failed. Review the report.",
+                        self._active_operation_ui_generation,
+                    )
+                except Exception:
+                    self._finish_operation_ui(
+                        "Operation failed. Review the report.",
+                        self._active_operation_ui_generation,
+                    )
 
     def _run_export_operation(self):
         total_start = time.perf_counter()
+        operation_failed = False
         self._reset_external_language_operation_state()
         self._reset_conversion_operation_state()
         self._reset_amulet_translator_capability_state()
@@ -12259,6 +19372,7 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
             self._log("Finished. The selected blocks were moved into storage.")
 
         except Exception as exc:
+            operation_failed = True
             self._log("")
             self._log(f"Operation failed: {exc}")
             self._log(f"Total operation time before failure: {self._format_seconds(time.perf_counter() - total_start)}")
@@ -12269,5 +19383,21 @@ class PluginClassName(wx.Panel, DefaultOperationUI):
                 self._release_operation_display_name_caches()
                 self._release_operation_conversion_caches()
                 self._release_amulet_translator_capability_state()
+                status_label = (
+                    "Operation failed. Review the report."
+                    if operation_failed
+                    else "Done. Selected blocks were moved into storage."
+                )
+                try:
+                    wx.CallAfter(
+                        self._finish_operation_ui,
+                        status_label,
+                        self._active_operation_ui_generation,
+                    )
+                except Exception:
+                    self._finish_operation_ui(
+                        status_label,
+                        self._active_operation_ui_generation,
+                    )
 
 export = dict(name="Blocks to Storage", operation=PluginClassName)
