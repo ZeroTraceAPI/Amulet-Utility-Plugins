@@ -11,7 +11,10 @@ Auto Light is an Amulet Map Editor operation plugin for placing light sources ac
 * Supports floor, wall, and ceiling attachment rules where appropriate.
 * Can replace approved grass, flowers, and other small decorative plants at placement positions.
 * Handles connected plant halves so supported tall plants are not left incomplete or floating.
-* Keeps block selection available while the plugin panel is open.
+* Keeps block selection available while the floating window is open.
+* Uses a resizable custom floating window with a compact launcher in Amulet's Operations panel.
+* Includes an optional visual light-source selector using Amulet's cached Minecraft textures, with text-only fallback.
+* Remembers the main-window size, Manage Plugin Files window size, report-console visibility, and visual-selector preference.
 * Saves settings automatically and includes local settings-management tools.
 * Includes a built-in operation report with warnings, timing, and placement details.
 
@@ -43,7 +46,7 @@ Install only one version at a time. Installing both can create duplicate operati
 
 1. Create a backup of the world before making any changes in case you change your mind.
 2. Open a Minecraft Bedrock Edition world in Amulet.
-3. Open **Auto Light** from the Operations tab.
+3. Open **Auto Light** from the Operations tab. Its floating window opens automatically, and the compact launcher remains available for focusing or reopening it.
 4. Select the area that should be checked.
 5. Choose a light type and detection mode.
 6. Adjust spacing and the placement options shown for that light type.
@@ -122,7 +125,7 @@ Settings are saved automatically to:
 %LOCALAPPDATA%\AmuletTeam\AmuletMapEditor\Config\plugins\edit_plugins\Auto Light.config
 ```
 
-**Manage settings...** can save, reset, repair, import, export, delete, or open the folder for the config file. Unknown settings entries are preserved where possible so future options are not discarded unnecessarily.
+**Manage Plugin Files...** can save, reset, repair, import, export, delete, or open the folder for the config file. Unknown settings entries are preserved where possible so future options are not discarded unnecessarily.
 
 The built-in console reports:
 
@@ -133,7 +136,7 @@ The built-in console reports:
 * Warnings and operation timing
 * Performance information
 
-Use **Save Last Report...** to save the latest report as a UTF-8 text file.
+Use **Save Report** to save the latest report as a UTF-8 text file.
 
 ## Things to Consider
 

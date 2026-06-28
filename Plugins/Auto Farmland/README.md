@@ -13,6 +13,9 @@ Auto Farmland is an Amulet Map Editor operation plugin for converting exposed te
 * Includes 67 selectable upper-slab types, including sulfur and cinnabar variants.
 * Protects block entities, productive plants, unsupported surfaces, and unfamiliar obstructions.
 * Validates the completed plan before writing and applies it as one undoable Amulet operation.
+* Uses a resizable custom floating window with a compact launcher in Amulet's Operations panel.
+* Includes optional crop and slab selectors using Amulet's cached Minecraft textures, with text-only fallback.
+* Remembers the main-window size, Manage Plugin Files window size, report-console visibility, and visual-selector preference.
 * Saves settings automatically and includes a built-in operation report.
 
 ## Installation
@@ -43,7 +46,7 @@ Install only one version at a time. Installing both can create duplicate operati
 
 1. Create a backup of the world before making any changes in case you change your mind.
 2. Open a Minecraft Bedrock Edition world in Amulet.
-3. Open **Auto Farmland** from the Operations tab.
+3. Open **Auto Farmland** from the Operations tab. Its floating window opens automatically, and the compact launcher remains available for focusing or reopening it.
 4. Select the terrain and enough vertical space for the intended farmland and crops.
 5. Choose the farmland placement mode and crop layout.
 6. Configure growth, row direction, stem spacing, and irrigation.
@@ -170,7 +173,7 @@ The built-in report includes:
 * Planning and write timing
 * Warnings and validation results
 
-Use **Save Last Report...** to save the latest report as a UTF-8 text file.
+Use **Save Report** to save the latest report as a UTF-8 text file.
 
 ## Things to Consider
 

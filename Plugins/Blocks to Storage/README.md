@@ -15,6 +15,9 @@ The plugin scans and counts the selection, converts supported placed blocks into
 * Includes state-aware handling for many legacy, imported, generic, placed-only, colored, and variant block identities.
 * Uses conservative conversion authority and safely skips unresolved or unsafe item identities by default.
 * Includes fast direct chunk scanning and clearing with safer fallback behavior.
+* Uses a resizable custom floating window with a compact launcher in Amulet's Operations panel.
+* Includes optional visual selectors for storage containers and shulker colors using Amulet's cached Minecraft textures, with text-only fallback.
+* Remembers the main-window size, Manage Plugin Files window size, report-console visibility, and visual-selector preference.
 * Saves settings automatically and includes detailed reports and optional diagnostics.
 
 ## Installation
@@ -53,11 +56,11 @@ The operation stops with a report when the selected area cannot hold the require
 
 1. Create a backup of the world before making any changes in case you change your mind.
 2. Open a Minecraft Bedrock Edition world in Amulet.
-3. Open **Blocks to Storage** from the Operations tab.
+3. Open **Blocks to Storage** from the Operations tab. Its floating window opens automatically, and the compact launcher remains available for focusing or reopening it.
 4. Select the blocks to collect and enough room for the resulting storage.
 5. Choose the storage container and layout options.
 6. Review **Safety** settings, especially **Preserve bedrock** and **Include unusual blocks**.
-7. Select **Delete Blocks to Storage**.
+7. Select **Scan & Store**.
 8. Review the report, inspect the storage contents, and verify important conversions before saving the world.
 
 ## Storage Options
@@ -69,6 +72,8 @@ Choose one of the following:
 * **Chest**, with optional 54-slot double chests.
 * **Barrel**, using 27-slot containers.
 * **Shulker Box**, using 27-slot containers with a selectable color.
+
+When enabled, the visual selectors use Amulet's cached Minecraft textures and fall back to text-only controls when the required artwork is unavailable.
 
 **Vertical stack height** controls how many containers may be stacked before the layout begins another line. The default is 8 and the maximum is 40, limited by the selected height.
 
@@ -141,7 +146,7 @@ Some blocks are skipped deliberately to avoid empty, ghost, malformed, or unsafe
 
 ## Optional Display-Name and Conversion Files
 
-**Manage plugin files...** provides local management for the plugin's settings and optional data files.
+**Manage Plugin Files...** provides local management for the plugin's settings and optional data files.
 
 ### `Blocks to Storage.config`
 
@@ -189,7 +194,7 @@ The built-in console reports:
 * Scan, clear, placement, and total timing
 * Fast-path results and fallback information
 
-Use **Save Last Report...** to save the latest report as a text file.
+Use **Save Report** to save the latest report as a text file.
 
 Normal users can leave **Debug and Diagnostics** and **Advanced Diagnostics** collapsed and disabled. Those options are intended for conversion development, item-frame audits, translator probes, comparison reports, and controlled testing of unresolved writes.
 

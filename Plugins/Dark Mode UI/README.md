@@ -12,6 +12,8 @@ Dark Mode UI is an Amulet Map Editor operation plugin that applies a reversible 
 * Skips OpenGL and canvas-like controls by default to avoid disturbing the 3D viewport.
 * Includes button-hover and notebook / tab compatibility options.
 * Preserves the intended black background and green text of supported plugin consoles.
+* Uses a resizable matte-black floating window with a compact launcher in Amulet's Operations panel.
+* Remembers the main-window size, Manage Plugin Files window size, and diagnostic-console visibility.
 * Includes status, UI scanning, logging, and config-file tools for troubleshooting.
 
 ## Installation
@@ -40,7 +42,7 @@ Install only one version at a time. Installing both can create duplicate operati
 
 ## Basic Use
 
-1. Open **Dark Mode UI** from the Operations tab.
+1. Open **Dark Mode UI** from the Operations tab. Its floating window opens automatically, and the compact launcher remains available for focusing or reopening it.
 2. Choose the target scope and appearance options.
 3. Select **Apply Dark Mode**.
 4. Use **Save Settings** to keep the current configuration.
@@ -101,8 +103,7 @@ These limits bound how much of the interface tree is scanned during a theme pass
 * **Status** reports controller state, watched windows, and incremental theme activity.
 * **Scan UI** records the current target control tree for troubleshooting future Amulet or wxPython changes.
 * **Save Log** saves the current log.
-* **Open Config Folder** opens the saved-settings location.
-* **Delete Config File** removes saved Dark Mode UI settings.
+* **Manage Plugin Files** opens the plugin and settings folders and provides reset, repair, import, export, and config-deletion actions.
 * **Clear Log** clears the visible diagnostic log.
 
 UI scanning and status tools are diagnostic only. They do not modify world data.
@@ -115,7 +116,7 @@ Settings are stored at:
 %LOCALAPPDATA%\AmuletTeam\AmuletMapEditor\Config\plugins\edit_plugins\Dark Mode UI.config
 ```
 
-Deleting the config file resets saved behavior the next time the plugin loads. The plugin can also open the folder or delete the file through its own controls.
+Deleting the config file resets saved behavior the next time the plugin loads. **Manage Plugin Files** can open the plugin or settings folder and can reset, repair, import, export, or delete the config.
 
 ## Supported Plugin Consoles
 
